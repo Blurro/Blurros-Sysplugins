@@ -1,0 +1,36 @@
+name: Temporary 3DS TLS Portlibs
+
+on:
+  push:
+    paths:
+      - '.github/workflows/_temporary_tls_portlibs.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - name: Install 3DS TLS portlibs
+        run: |
+          dkp-pacman -Syu --noconfirm
+          dkp-pacman -S --needed --noconfirm 3ds-curl 3ds-mbedtls 3ds-zlib
+
+      - name: Pack build-time libraries
+        run: |
+          mkdir -p /tmp/tls-portlibs/include /tmp/tls-portlibs/lib
+          cp -a /opt/devkitpro/portlibs/3ds/include/curl /tmp/tls-portlibs/include/
+          cp -a /opt/devkitpro/portlibs/3ds/include/mbedtls /tmp/tls-portlibs/include/
+          cp -a /opt/devkitpro/portlibs/3ds/lib/libcurl.a /tmp/tls-portlibs/lib/
+          cp -a /opt/devkitpro/portlibs/3ds/lib/libmbedtls.a /tmp/tls-portlibs/lib/
+          cp -a /opt/devkitpro/portlibs/3ds/lib/libmbedx509.a /tmp/tls-portlibs/lib/
+          cp -a /opt/devkitpro/portlibs/3ds/lib/libmbedcrypto.a /tmp/tls-portlibs/lib/
+          cp -a /opt/devkitpro/portlibs/3ds/lib/libz.a /tmp/tls-portlibs/lib/
+          tar -C /tmp -czf /tmp/3ds-tls-portlibs.tar.gz tls-portlibs
+
+      - name: Upload build-time libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3ds-tls-portlibs
+          path: /tmp/3ds-tls-portlibs.tar.gz
+          if-no-files-found: error
