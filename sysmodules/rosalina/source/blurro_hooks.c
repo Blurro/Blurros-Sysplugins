@@ -1,0 +1,429 @@
+#include <3ds.h>
+#include "memory.h"
+#include "draw.h"
+#include "menu.h"
+
+#define PLUGIN_CODE(id)   __attribute__((section(".plugin_" #id), used))
+#define PLUGIN_MAIN(id)   __attribute__((section(".plugin_" #id "_entry"), used))
+#define PLUGIN_RODATA(id) __attribute__((section(".pluginrodata_" #id), used))
+#define PLUGIN_DATA(id)   __attribute__((section(".plugindata_" #id), used))
+#define PLUGIN_BSS(id)    __attribute__((section(".pluginbss_" #id), used))
+
+typedef struct PluginMenuRegistration
+{
+    u32 pluginId;
+    const char *title;
+    void (*callback)(void);
+    u32 color;
+    struct PluginMenuRegistration *next;
+} PluginMenuRegistration;
+
+extern void *pluginTable_blur[];
+
+#define BLUR_HOST__svcFlushEntireDataCache          ((void(*)(void))pluginTable_blur[6])
+#define BLUR_HOST__blur_marker_menudraw_start       ((u32)pluginTable_blur[10])
+#define BLUR_HOST__blur_marker_menudraw_end         ((u32)pluginTable_blur[11])
+#define BLUR_HOST__blur_marker_menu_entered         ((u32)pluginTable_blur[13])
+#define BLUR_HOST__blur_marker_menu_leaving         ((u32)pluginTable_blur[14])
+#define BLUR_HOST__Draw_SetupFramebuffer            ((void(*)(void))pluginTable_blur[15])
+#define BLUR_HOST__Draw_RestoreFramebuffer          ((void(*)(void))pluginTable_blur[16])
+#define BLUR_HOST__Draw_FreeFramebufferCache        ((void(*)(void))pluginTable_blur[17])
+#define BLUR_HOST__svcInvalidateEntireInstructionCache ((void(*)(void))pluginTable_blur[18])
+#define BLUR_MENU__AddItem                          ((bool(*)(PluginMenuRegistration*,u32,const char*,void(*)(void),u32))pluginTable_blur[24])
+#define BLUR_PLUGIN_ID                              0x72756C62u
+
+extern const char g_blurFeatureTitle[];
+extern PluginMenuRegistration g_blurMenuRegistration;
+extern bool PLUGIN_blur_MapPage(u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress);
+extern void PLUGIN_blur_UnmapPage(u32 mappedBase);
+extern void PLUGIN_blur_RunMenuDrawHookBody(Menu *currentMenu);
+extern void PLUGIN_blur_SetMenuFreezeInternal(bool freeze);
+extern bool PLUGIN_blur_EnsureCoolThread(void);
+extern void PLUGIN_blur_SetHostIsLuma(bool isLuma);
+extern void PLUGIN_blur_OpenFeatureMenu(void);
+extern void PLUGIN_blur_LoadMenuSettings(void);
+extern bool PLUGIN_blur_IsMenuTextEnabled(void);
+
+PLUGIN_BSS(blur) u32 blur_menudraw_return_addr;
+PLUGIN_BSS(blur) u32 blur_menu_enter_return_addr;
+PLUGIN_BSS(blur) u32 blur_menu_leave_return_addr;
+PLUGIN_BSS(blur) static u32 g_blurMenuDrawOriginal0;
+PLUGIN_BSS(blur) static u32 g_blurMenuDrawOriginal1;
+PLUGIN_BSS(blur) static bool g_blurMenuDrawInstalled;
+
+PLUGIN_CODE(blur) __attribute__((naked)) void PLUGIN_blur_MenuDrawHook(void)
+{
+    __asm__ volatile(
+        // space for the return address
+        "sub sp, sp, #4\n"
+        "push {r0-r12, lr}\n"
+        "mrs r12, cpsr\n"
+        "push {r12}\n"
+
+        // r6 moved through the items, the saved count is 0x6C above this frame
+        "ldr r0, [sp, #0x6C]\n"
+        "sub r0, r6, r0, lsl #4\n"
+        "bl PLUGIN_blur_RunMenuDrawHookBody\n"
+
+        // keep the return address in plugin data instead of patching this code
+        "ldr r12, 1f\n"
+        "ldr r12, [r12]\n"
+        "str r12, [sp, #60]\n"
+
+        "pop {r12}\n"
+        "msr cpsr_f, r12\n"
+        "pop {r0-r12, lr}\n"
+        "pop {pc}\n"
+        "1:\n"
+        ".word blur_menudraw_return_addr\n"
+    );
+}
+
+PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuDrawHook(u32 *saved0, u32 *saved1)
+{
+    u32 start = BLUR_HOST__blur_marker_menudraw_start;
+    u32 end = BLUR_HOST__blur_marker_menudraw_end;
+    u32 hostMapBase = 0;
+    u32 hostAddress = 0;
+    u32 instr0;
+    u32 instr1;
+
+    if (!PLUGIN_blur_MapPage(start, &hostMapBase, &hostAddress))
+        return false;
+
+    instr0 = *(volatile u32*)hostAddress;
+    instr1 = *(volatile u32*)(hostAddress + 4);
+
+    if (end <= start + 8u || end - start > 0x400u)
+    {
+        PLUGIN_blur_UnmapPage(hostMapBase);
+        return false;
+    }
+
+    if (saved0)
+        *saved0 = instr0;
+    if (saved1)
+        *saved1 = instr1;
+
+    PLUGIN_blur_SetHostIsLuma(end - start < 0x80u);
+    blur_menudraw_return_addr = end;
+    *(volatile u32*)(hostAddress + 4) = (u32)PLUGIN_blur_MenuDrawHook;
+    *(volatile u32*)hostAddress = 0xE51FF004;
+
+    PLUGIN_blur_UnmapPage(hostMapBase);
+    return true;
+}
+
+PLUGIN_CODE(blur) static bool PLUGIN_blur_RestoreHostWords(
+    u32 address,
+    u32 expectedHook,
+    u32 word0,
+    u32 word1
+);
+PLUGIN_CODE(blur) static void PLUGIN_blur_SyncExecutableChanges(void);
+
+PLUGIN_CODE(blur) bool PLUGIN_blur_SetMenuTextHookEnabled(bool enabled)
+{
+    if (enabled == g_blurMenuDrawInstalled)
+        return true;
+
+    if (enabled)
+    {
+        u32 original0;
+        u32 original1;
+        if (!PLUGIN_blur_InstallMenuDrawHook(&original0, &original1))
+            return false;
+
+        g_blurMenuDrawOriginal0 = original0;
+        g_blurMenuDrawOriginal1 = original1;
+        g_blurMenuDrawInstalled = true;
+        PLUGIN_blur_SyncExecutableChanges();
+        return true;
+    }
+
+    if (!PLUGIN_blur_RestoreHostWords(
+            BLUR_HOST__blur_marker_menudraw_start,
+            (u32)PLUGIN_blur_MenuDrawHook,
+            g_blurMenuDrawOriginal0,
+            g_blurMenuDrawOriginal1))
+    {
+        return false;
+    }
+
+    g_blurMenuDrawInstalled = false;
+    PLUGIN_blur_SyncExecutableChanges();
+    return true;
+}
+
+PLUGIN_CODE(blur) static bool PLUGIN_blur_RestoreHostWords(
+    u32 address,
+    u32 expectedHook,
+    u32 word0,
+    u32 word1
+)
+{
+    u32 mapBase;
+    u32 mappedAddress;
+
+    if (!PLUGIN_blur_MapPage(address, &mapBase, &mappedAddress))
+        return false;
+
+    u32 current0 = *(volatile u32*)mappedAddress;
+    u32 current1 = *(volatile u32*)(mappedAddress + 4);
+
+    if (current0 == word0 && current1 == word1)
+    {
+        PLUGIN_blur_UnmapPage(mapBase);
+        return true;
+    }
+
+    if (current0 != 0xE51FF004u || current1 != expectedHook)
+    {
+        PLUGIN_blur_UnmapPage(mapBase);
+        return false;
+    }
+
+    *(volatile u32*)mappedAddress = word0;
+    *(volatile u32*)(mappedAddress + 4) = word1;
+    PLUGIN_blur_UnmapPage(mapBase);
+    return true;
+}
+
+PLUGIN_CODE(blur) static bool PLUGIN_blur_DecodeArmBranch(u32 instr, u32 address, u32 *target)
+{
+    if (!target || (instr & 0x0E000000u) != 0x0A000000u)
+        return false;
+
+    s32 imm24 = (s32)(instr << 8) >> 8;
+    *target = (u32)((s32)(address + 8) + imm24 * 4);
+    return true;
+}
+
+PLUGIN_CODE(blur) static void PLUGIN_blur_MenuEnterFreezeBody(void)
+{
+    PLUGIN_blur_SetMenuFreezeInternal(true);
+    BLUR_HOST__Draw_SetupFramebuffer();
+}
+
+PLUGIN_CODE(blur) __attribute__((naked)) void PLUGIN_blur_MenuEnterFreezeHook(void)
+{
+    __asm__ volatile(
+        "bl PLUGIN_blur_MenuEnterFreezeBody\n"
+        "ldr r12, 1f\n"
+        "ldr pc, [r12]\n"
+        "1:\n"
+        ".word blur_menu_enter_return_addr\n"
+    );
+}
+
+PLUGIN_CODE(blur) static void PLUGIN_blur_MenuLeaveFreezeBody(void)
+{
+    PLUGIN_blur_SetMenuFreezeInternal(false);
+    BLUR_HOST__Draw_RestoreFramebuffer();
+    BLUR_HOST__Draw_FreeFramebufferCache();
+}
+
+PLUGIN_CODE(blur) __attribute__((naked)) void PLUGIN_blur_MenuLeaveFreezeHook(void)
+{
+    __asm__ volatile(
+        "bl PLUGIN_blur_MenuLeaveFreezeBody\n"
+        "ldr r12, 1f\n"
+        "ldr pc, [r12]\n"
+        "1:\n"
+        ".word blur_menu_leave_return_addr\n"
+    );
+}
+
+PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuFreezeEnterHook(u32 *saved0, u32 *saved1)
+{
+    u32 marker = BLUR_HOST__blur_marker_menu_entered;
+    u32 hostMapBase = 0;
+    u32 hostAddress = 0;
+    u32 instr0;
+    u32 instr1;
+    u32 setupTarget;
+    u32 returnTarget;
+
+    if (!PLUGIN_blur_MapPage(marker, &hostMapBase, &hostAddress))
+        return false;
+
+    instr0 = *(volatile u32*)hostAddress;
+    instr1 = *(volatile u32*)(hostAddress + 4);
+
+    if (!PLUGIN_blur_DecodeArmBranch(instr0, marker, &setupTarget) ||
+        !PLUGIN_blur_DecodeArmBranch(instr1, marker + 4, &returnTarget) ||
+        (instr0 & 0x01000000u) == 0 ||
+        (instr1 & 0x01000000u) != 0 ||
+        setupTarget != (u32)BLUR_HOST__Draw_SetupFramebuffer)
+    {
+        PLUGIN_blur_UnmapPage(hostMapBase);
+        return false;
+    }
+
+    if (saved0) *saved0 = instr0;
+    if (saved1) *saved1 = instr1;
+
+    blur_menu_enter_return_addr = returnTarget;
+    *(volatile u32*)(hostAddress + 4) = (u32)PLUGIN_blur_MenuEnterFreezeHook;
+    *(volatile u32*)hostAddress = 0xE51FF004u;
+    PLUGIN_blur_UnmapPage(hostMapBase);
+    return true;
+}
+
+PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuFreezeLeaveHook(u32 *saved0, u32 *saved1)
+{
+    u32 marker = BLUR_HOST__blur_marker_menu_leaving;
+    u32 hostMapBase = 0;
+    u32 hostAddress = 0;
+    u32 instr0;
+    u32 instr1;
+    u32 restoreTarget;
+    u32 freeTarget;
+
+    if (!PLUGIN_blur_MapPage(marker, &hostMapBase, &hostAddress))
+        return false;
+
+    instr0 = *(volatile u32*)hostAddress;
+    instr1 = *(volatile u32*)(hostAddress + 4);
+
+    if (!PLUGIN_blur_DecodeArmBranch(instr0, marker, &restoreTarget) ||
+        !PLUGIN_blur_DecodeArmBranch(instr1, marker + 4, &freeTarget) ||
+        (instr0 & 0x01000000u) == 0 ||
+        (instr1 & 0x01000000u) == 0 ||
+        restoreTarget != (u32)BLUR_HOST__Draw_RestoreFramebuffer ||
+        freeTarget != (u32)BLUR_HOST__Draw_FreeFramebufferCache)
+    {
+        PLUGIN_blur_UnmapPage(hostMapBase);
+        return false;
+    }
+
+    if (saved0) *saved0 = instr0;
+    if (saved1) *saved1 = instr1;
+
+    blur_menu_leave_return_addr = marker + 8u;
+    *(volatile u32*)(hostAddress + 4) = (u32)PLUGIN_blur_MenuLeaveFreezeHook;
+    *(volatile u32*)hostAddress = 0xE51FF004u;
+    PLUGIN_blur_UnmapPage(hostMapBase);
+    return true;
+}
+
+typedef struct
+{
+    u32 installed;
+    u32 draw0;
+    u32 draw1;
+    u32 enter0;
+    u32 enter1;
+    u32 leave0;
+    u32 leave1;
+} BlurHookState;
+
+#define BLUR_HOOK_DRAW  (1u << 0)
+#define BLUR_HOOK_ENTER (1u << 1)
+#define BLUR_HOOK_LEAVE (1u << 2)
+
+PLUGIN_CODE(blur) static void PLUGIN_blur_SyncExecutableChanges(void)
+{
+    BLUR_HOST__svcFlushEntireDataCache();
+    BLUR_HOST__svcInvalidateEntireInstructionCache();
+}
+
+PLUGIN_CODE(blur) static bool PLUGIN_blur_RollBackHooks(const BlurHookState *state)
+{
+    bool restored = true;
+
+    if ((state->installed & BLUR_HOOK_LEAVE) &&
+        !PLUGIN_blur_RestoreHostWords(
+            BLUR_HOST__blur_marker_menu_leaving,
+            (u32)PLUGIN_blur_MenuLeaveFreezeHook,
+            state->leave0,
+            state->leave1))
+    {
+        restored = false;
+    }
+
+    if ((state->installed & BLUR_HOOK_ENTER) &&
+        !PLUGIN_blur_RestoreHostWords(
+            BLUR_HOST__blur_marker_menu_entered,
+            (u32)PLUGIN_blur_MenuEnterFreezeHook,
+            state->enter0,
+            state->enter1))
+    {
+        restored = false;
+    }
+
+    if ((state->installed & BLUR_HOOK_DRAW) &&
+        !PLUGIN_blur_RestoreHostWords(
+            BLUR_HOST__blur_marker_menudraw_start,
+            (u32)PLUGIN_blur_MenuDrawHook,
+            state->draw0,
+            state->draw1))
+    {
+        restored = false;
+    }
+
+    if ((state->installed & BLUR_HOOK_DRAW) && restored)
+        g_blurMenuDrawInstalled = false;
+
+    PLUGIN_blur_SyncExecutableChanges();
+    return restored;
+}
+
+PLUGIN_MAIN(blur) bool PLUGIN_blur_Main(void)
+{
+    BlurHookState state;
+
+    state.installed = 0;
+
+    if (!BLUR_MENU__AddItem)
+        return false;
+
+    PLUGIN_blur_LoadMenuSettings();
+    PLUGIN_blur_SetMenuFreezeInternal(false);
+
+    if (PLUGIN_blur_IsMenuTextEnabled())
+    {
+        if (!PLUGIN_blur_InstallMenuDrawHook(&state.draw0, &state.draw1))
+            goto fail;
+        g_blurMenuDrawOriginal0 = state.draw0;
+        g_blurMenuDrawOriginal1 = state.draw1;
+        g_blurMenuDrawInstalled = true;
+        state.installed |= BLUR_HOOK_DRAW;
+    }
+    else
+    {
+        u32 span = BLUR_HOST__blur_marker_menudraw_end - BLUR_HOST__blur_marker_menudraw_start;
+        PLUGIN_blur_SetHostIsLuma(span < 0x80u);
+    }
+
+    if (!PLUGIN_blur_InstallMenuFreezeEnterHook(&state.enter0, &state.enter1))
+        goto fail;
+    state.installed |= BLUR_HOOK_ENTER;
+
+    if (!PLUGIN_blur_InstallMenuFreezeLeaveHook(&state.leave0, &state.leave1))
+        goto fail;
+    state.installed |= BLUR_HOOK_LEAVE;
+
+    PLUGIN_blur_SyncExecutableChanges();
+
+    if (!PLUGIN_blur_EnsureCoolThread())
+        goto fail;
+
+    (void)BLUR_MENU__AddItem(
+        &g_blurMenuRegistration,
+        BLUR_PLUGIN_ID,
+        g_blurFeatureTitle,
+        PLUGIN_blur_OpenFeatureMenu,
+        RGB565(6, 25, 31)
+    );
+
+    return true;
+
+fail:
+    // only unload Blur if every hook was removed safely
+    if (PLUGIN_blur_RollBackHooks(&state))
+        return false;
+
+    (void)PLUGIN_blur_EnsureCoolThread();
+    return true;
+}
