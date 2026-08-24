@@ -44,9 +44,9 @@ extern void PLUGIN_blur_OpenFeatureMenu(void);
 extern void PLUGIN_blur_LoadMenuSettings(void);
 extern bool PLUGIN_blur_IsMenuTextEnabled(void);
 
-PLUGIN_BSS(blur) u32 blur_menudraw_return_addr;
-PLUGIN_BSS(blur) u32 blur_menu_enter_return_addr;
-PLUGIN_BSS(blur) u32 blur_menu_leave_return_addr;
+PLUGIN_DATA(blur) u32 blur_menudraw_return_addr = 0u;
+PLUGIN_DATA(blur) u32 blur_menu_enter_return_addr = 0u;
+PLUGIN_DATA(blur) u32 blur_menu_leave_return_addr = 0u;
 PLUGIN_BSS(blur) static u32 g_blurMenuDrawOriginal0;
 PLUGIN_BSS(blur) static u32 g_blurMenuDrawOriginal1;
 PLUGIN_BSS(blur) static bool g_blurMenuDrawInstalled;
@@ -68,6 +68,11 @@ PLUGIN_CODE(blur) __attribute__((naked)) void PLUGIN_blur_MenuDrawHook(void)
         // keep the return address in plugin data instead of patching this code
         "ldr r12, 1f\n"
         "ldr r12, [r12]\n"
+        "cmp r12, #0\n"
+        "bne 2f\n"
+        "ldr r12, 3f\n"
+        "ldr r12, [r12, #44]\n"
+        "2:\n"
         "str r12, [sp, #60]\n"
 
         "pop {r12}\n"
@@ -76,6 +81,8 @@ PLUGIN_CODE(blur) __attribute__((naked)) void PLUGIN_blur_MenuDrawHook(void)
         "pop {pc}\n"
         "1:\n"
         ".word blur_menudraw_return_addr\n"
+        "3:\n"
+        ".word pluginTable_blur\n"
     );
 }
 

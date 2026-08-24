@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$SCRIPT_DIR"
 
 if (( BASH_VERSINFO[0] < 4 )); then
-    printf 'ERROR: makeplugin.sh requires Bash 4 or newer.\n' >&2
+    printf 'ERROR: makeplugingit.sh requires Bash 4 or newer.\n' >&2
     exit 1
 fi
 
@@ -21,7 +21,7 @@ fi
 # =========================
 #
 # Each plugin entry is:
-#   "id|output_name|priority|allowed_refs"
+#   "id|output_name|allowed_refs"
 #
 # Fields:
 #   id
@@ -30,73 +30,57 @@ fi
 #       These are unique per module, both loader and rosalina can have a plugin with the same id
 #
 #   output_name
-#       Base filename for the generated .3nx
+#       Base filename for the GitHub update payload.
 #       Final filename becomes:
-#           output_name.priority.3nx
-#       Completed files are written beside makeplugin.sh in the Nexus root,
-#       which is also where a normal top-level build writes boot.firm.
+#           output_name.bin
 #       Example:
-#           blurPLGbase.50.3nx
-#           playcoinmod.100.3nx
+#           blur_r.bin
+#           coin_l.bin
 #
-#   priority
-#       Lower filename priority sorts first; ties use filename, then stacked-entry order. Final sorted order is Main() order.
-#       As ties are resolved, sorted priority between plugins cannot end up as equal.
-#       Example:
-#           blur priority 0 has main() called before coin priority 5.
+#       GitHub payloads have no configured runtime priority. Internally this script
+#       uses priority 0 only while create3nx.py emits a temporary standalone .3nx;
+#       the public payload is then written as output_name.bin.
 #
 #   allowed_refs
-#       Plugin IDs this plugin may reference, excluding itself.
-#       A referenced plugin is a dependency only when its sorted priority is lower, if higher then its up to the
-#       author to manage the potential risks, as that plugin's main() may return false and unload from memory.
-#       Higher = reference, lower = dependency.
-#       If a plugin's reference is unavailable before main()s run, its runtime pointer slots to it are NULL.
-#       If a plugin is early-rejected or main() returns false, the runtime rejects not-yet-run plugins that depend on it.
+#       Plugin IDs this payload may reference, excluding itself.
+#       This only controls which cross-plugin repair targets are permitted in the
+#       standalone update payload. Dependency/reference ordering is determined later
+#       by the actually installed plugin filenames/stacks, not by this GitHub builder.
 #       Example config:
 #           blur references only itself, so this can be empty:
-#               "blur|blurPLGbase|10|"
-#           if coin were to reference blur and ref2 it would be
-#               "coin|coinmod|50|blur,ref2"
+#               "blur|blur_r|"
+#           if coin were to reference blur and ref2 it would be:
+#               "coin|coin_r|blur,ref2"
 #
 
 ROSALINA_PLUGIN_CONFIG=(
-    "MENU|ModMenu|0|"
-    "blur|blurPLGbase|10|MENU"
-    "coin|coinrosalina|50|blur,MENU"
-    "powr|PowerPrevent|60|MENU"
+    "MENU|menu_r|"
+    "blur|blur_r|MENU"
+    "coin|coin_r|blur,MENU"
+    "powr|powr_r|MENU"
 )
 
 LOADER_PLUGIN_CONFIG=(
-    "coin|coinloader|50|"
+    "coin|coin_l|"
 )
 
 # Optional metadata is appended to one single-entry .3nx after its normal 16-byte body padding.
 # Each entry is:
 #   "plugin_name|file1|file2|..."
-# plugin_name is the configured output_name, or the base name of exactly one completed
-# plugin_name.<priority>.3nx beside this script. Metadata files must also be beside this script.
+# plugin_name is the configured output_name. Metadata files must also be beside this script.
 # Files are concatenated in listed order with no gaps, then the combined metadata is padded to 16 bytes.
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
-    "ModMenu|version.bin"
-    "blurPLGbase|version.bin"
-    "coinrosalina|version.bin"
-    "PowerPrevent|version.bin"
-    "coinloader|version.bin"
+    "menu_r|version.bin"
+    "blur_r|version.bin"
+    "coin_r|version.bin"
+    "powr_r|version.bin"
+    "coin_l|version.bin"
 )
 
-# Tip: 3nx file data can be stacked, to make one .3nx file hold multiple plugins. Place generated .3nx files at SD:/luma/plugins/
-# Stacked plugins in order of pluginA then pluginB, function the same as pluginA.1.3nx then pluginB.2.3nx
-# Each stack entry is:
-#   "output_name|priority|plugin_name,plugin_name[,...]"
-# Leave priority empty to keep the existing behavior of using the lowest member priority.
-# A supplied priority controls only the created stack filename; member ordering still follows member priorities.
-# Configured members use the files built by this run, stacked by config priorities.
-# Other non-config members use the single completed output_name.<priority>.3nx beside this script.
-# Already-stacked inputs are warned and dropped; module+ID duplicates fail the stack.
-
+# GitHub update payloads must be standalone single-entry files.
+# Stacking belongs in the normal stock makeplugin.sh build, not in this payload builder.
 STACKED_PLUGIN_CONFIG=(
-    "Playcoinz||blurPLGbase,coinloader,coinrosalina"
 )
 
 # USEFUL MARKER AND COMPILER INFORMATION!!!
@@ -131,12 +115,12 @@ STACKED_PLUGIN_CONFIG=(
 # Access host targets through the plugin table; do not use the host symbol directly at runtime.
 # This 'define' trick forces non-relative references, which is VERY IMPORTANT for plugin code to be relocatable
 #
-# Run ./makeplugin.sh for every plugin build. It automatically:
+# Run ./makeplugingit.sh when producing standalone GitHub update payloads. It automatically:
 # - runs a normal incremental make for plugin-code-only changes
 # - prepares marker placeholders, builds, then resolves semantic marker keys
 # - clean-builds if marked host source or marker tooling changed
 # - clean-builds if plugin IDs/order changed enough to change the linker layout
-# - does NOT clean-build for output name / priority / allowed_refs-only changes
+# - does NOT clean-build for output name / allowed_refs-only changes
 # - runs create3nx.py automatically after the build
 
 # =========================
@@ -144,6 +128,7 @@ STACKED_PLUGIN_CONFIG=(
 # =========================
 
 MAX_ALLOWED_REFS=31
+GITHUB_BUILD_PRIORITY=0
 
 LD_START_MARKER="/* pluginstart */"
 LD_END_MARKER="/* pluginend */"
@@ -154,6 +139,11 @@ PY_END_MARKER="#makepluginend#"
 total_config_count=$((${#ROSALINA_PLUGIN_CONFIG[@]} + ${#LOADER_PLUGIN_CONFIG[@]}))
 total_metadata_count=${#METADATA_CONFIG[@]}
 total_stack_count=${#STACKED_PLUGIN_CONFIG[@]}
+
+if [[ "$total_stack_count" -ne 0 ]]; then
+    printf 'ERROR: makeplugingit.sh only builds standalone GitHub payloads; STACKED_PLUGIN_CONFIG must stay empty.\n' >&2
+    exit 1
+fi
 
 if [[ "$total_config_count" -eq 0 && "$total_metadata_count" -eq 0 && "$total_stack_count" -eq 0 ]]; then
     printf '\n'
@@ -184,7 +174,7 @@ trim() {
 }
 
 
-STATE_DIR=".plgbuild"
+STATE_DIR=".plgbuild-git"
 mkdir -p "$STATE_DIR"
 
 ROOT_DIR="$(pwd -P)"
@@ -457,14 +447,13 @@ process_module_plugins() {
     for entry in "${module_plugin_config[@]}"; do
         local pid
         local out_name
-        local priority
+        local priority="$GITHUB_BUILD_PRIORITY"
         local allowed_refs
 
-        IFS='|' read -r pid out_name priority allowed_refs <<< "$entry"
+        IFS='|' read -r pid out_name allowed_refs <<< "$entry"
 
         pid="$(trim "$pid")"
         out_name="$(trim "$out_name")"
-        priority="$(trim "$priority")"
         allowed_refs="$(trim "$allowed_refs")"
 
         if [[ ! "$pid" =~ ^[A-Za-z0-9_]{4}$ ]]; then
@@ -477,27 +466,9 @@ process_module_plugins() {
             exit 1
         fi
 
-        if [[ ! "$priority" =~ ^[0-9]+$ ]]; then
-            echo "bad priority '$priority' for $pid in ${module_name}: must be a non-negative integer"
-            exit 1
-        fi
-
-        local priority_normalized="$priority"
-        while [[ ${#priority_normalized} -gt 1 && "${priority_normalized:0:1}" == "0" ]]; do
-            priority_normalized="${priority_normalized:1}"
-        done
-
-        if [[ ${#priority_normalized} -gt 10 ||
-              ( ${#priority_normalized} -eq 10 && "$priority_normalized" > "4294967295" ) ]]; then
-            echo "bad priority '$priority' for $pid in ${module_name}: maximum is 4294967295"
-            exit 1
-        fi
-
-        # Python 3 rejects decimal literals such as 010. Normalize once and
-        # use the same value in metadata and the final filename.
-        priority="$priority_normalized"
-
-        local final_name="${out_name}.${priority}.3nx"
+        # create3nx.py still requires a priority to form its temporary filename.
+        # This is internal only and is never published or placed in the manifest.
+        local final_name="${out_name}.${priority}.3nx" # temporary internal filename
         if [[ ${#final_name} -ge 256 ]]; then
             echo "bad output filename '$final_name' for $pid in ${module_name}: must be shorter than 256 ASCII bytes"
             exit 1
@@ -1213,6 +1184,13 @@ process_module_plugins "loader" LOADER_PLUGIN_CONFIG
 prepare_metadata_outputs
 prepare_stacked_outputs
 
+# Public GitHub outputs do not carry priority or the .3nx suffix.
+PUBLISHED_OUTPUTS=()
+for output_name in "${PUBLISHED_INDIVIDUAL_OUTPUTS[@]}"; do
+    output_base="${output_name%.${GITHUB_BUILD_PRIORITY}.3nx}"
+    PUBLISHED_OUTPUTS+=("${output_base}.bin")
+done
+
 printf '\n'
 for note in "${BUILD_NOTES[@]}"; do
     printf '%s\n' "$note"
@@ -1439,8 +1417,10 @@ if [[ -f "$OUTPUT_MANIFEST" ]]; then
 fi
 printf '\n'
 for output_name in "${PUBLISHED_INDIVIDUAL_OUTPUTS[@]}"; do
-    mv -f -- "${OUTPUT_STAGE}/${output_name}" "${ROOT_DIR}/${output_name}"
-    printf 'Wrote %s\n' "$output_name"
+    output_base="${output_name%.${GITHUB_BUILD_PRIORITY}.3nx}"
+    published_name="${output_base}.bin"
+    mv -f -- "${OUTPUT_STAGE}/${output_name}" "${ROOT_DIR}/${published_name}"
+    printf 'Wrote %s\n' "$published_name"
 done
 
 for output_name in "${METADATA_NONCONFIG_OUTPUTS[@]}"; do
@@ -1477,4 +1457,4 @@ else
     done
 fi
 
-printf '\nDone. Re-run ./makeplugin.sh for every plugin build.\n\n'
+printf '\nDone. GitHub update payloads are the generated .bin files.\n\n'
