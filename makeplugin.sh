@@ -46,7 +46,9 @@ fi
 #           blur priority 0 has main() called before coin priority 5.
 #
 #   allowed_refs
-#       Plugin IDs this plugin may reference, excluding itself.
+#       Plugin IDs this plugin may reference, excluding itself. A provider does not need to be built in the same run:
+#       undefined cross-plugin symbols named PLUGIN_<4-char ID>_* are resolved at runtime when that ID is listed here.
+#       The consumer header/source must give each imported symbol its correct ELF type (function/object).
 #       A referenced plugin is a dependency only when its sorted priority is lower, if higher then its up to the
 #       author to manage the potential risks, as that plugin's main() may return false and unload from memory.
 #       Higher = reference, lower = dependency.
@@ -60,7 +62,6 @@ fi
 #
 
 ROSALINA_PLUGIN_CONFIG=(
-    "MENU|ModMenu|0|"
     "blur|blurPLGbase|10|MENU"
     "coin|coinrosalina|50|blur,MENU"
     "powr|PowerPrevent|60|MENU"
@@ -78,11 +79,10 @@ LOADER_PLUGIN_CONFIG=(
 # Files are concatenated in listed order with no gaps, then the combined metadata is padded to 16 bytes.
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
-    "ModMenu|version.bin"
-    "blurPLGbase|version.bin"
-    "coinrosalina|version.bin"
-    "PowerPrevent|version.bin"
-    "coinloader|version.bin"
+    "blurPLGbase|version101.bin"
+    "coinrosalina|version101.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "PowerPrevent|version100.bin"
+    "coinloader|version101.bin"
 )
 
 # Tip: 3nx file data can be stacked, to make one .3nx file hold multiple plugins. Place generated .3nx files at SD:/luma/plugins/
@@ -96,7 +96,7 @@ METADATA_CONFIG=(
 # Already-stacked inputs are warned and dropped; module+ID duplicates fail the stack.
 
 STACKED_PLUGIN_CONFIG=(
-    "Playcoinz||blurPLGbase,coinloader,coinrosalina"
+    "Playcoinz|10|blurPLGbase,coinloader,coinrosalina"
 )
 
 # USEFUL MARKER AND COMPILER INFORMATION!!!
@@ -134,9 +134,10 @@ STACKED_PLUGIN_CONFIG=(
 # Run ./makeplugin.sh for every plugin build. It automatically:
 # - runs a normal incremental make for plugin-code-only changes
 # - prepares marker placeholders, builds, then resolves semantic marker keys
-# - clean-builds if marked host source or marker tooling changed
-# - clean-builds if plugin IDs/order changed enough to change the linker layout
-# - does NOT clean-build for output name / priority / allowed_refs-only changes
+# - incrementally recompiles changed marked host sources while preserving unrelated .o files
+# - relinks without recompiling source when plugin IDs/order only change the linker layout
+# - recompiles all C/C++ sources only if the semantic GCC marker plugin itself changes
+# - does NOT relink for output name / priority / allowed_refs-only changes
 # - runs create3nx.py automatically after the build
 
 # =========================
@@ -144,6 +145,8 @@ STACKED_PLUGIN_CONFIG=(
 # =========================
 
 MAX_ALLOWED_REFS=31
+
+
 
 LD_START_MARKER="/* pluginstart */"
 LD_END_MARKER="/* pluginend */"
@@ -191,7 +194,10 @@ ROOT_DIR="$(pwd -P)"
 
 declare -A MODULE_CONFIG_FP=()
 declare -A MODULE_MARKER_FP=()
-declare -A MODULE_CLEAN_REQUIRED=([rosalina]=false [loader]=false)
+declare -A MODULE_MARKER_SOURCE_STATE=()
+declare -A MODULE_MARKER_COMPILER_FP=()
+declare -A MODULE_MARKER_COMPILER_CHANGED=([rosalina]=false [loader]=false)
+declare -A MODULE_RELINK_REQUIRED=([rosalina]=false [loader]=false)
 declare -A MODULE_EMIT_COUNTS=([rosalina]=0 [loader]=0)
 declare -A OUTPUT_OWNERS=()
 declare -A PLUGIN_OUTPUT_FILES=()
@@ -327,6 +333,64 @@ write_state() {
     printf '%s' "$value" > "$path"
 }
 
+source_object_name() {
+    local rel="$1"
+    local base="${rel##*/}"
+    case "$base" in
+        *.cpp) printf '%s.o' "${base%.cpp}" ;;
+        *.c)   printf '%s.o' "${base%.c}" ;;
+        *)     return 1 ;;
+    esac
+}
+
+invalidate_module_object() {
+    local module_name="$1"
+    local rel="$2"
+    local obj
+    if ! obj="$(source_object_name "$rel")"; then
+        return 0
+    fi
+    local build_dir="./sysmodules/${module_name}/build"
+    rm -f -- "${build_dir}/${obj}" "${build_dir}/${obj%.o}.d"
+}
+
+invalidate_all_marker_compiled_objects() {
+    local module_name="$1"
+    local module_dir="./sysmodules/${module_name}"
+    local src
+    while IFS= read -r -d '' src; do
+        local rel="${src#${module_dir}/}"
+        invalidate_module_object "$module_name" "$rel"
+    done < <(find "$module_dir/source" -type f \( -name '*.c' -o -name '*.cpp' \) -print0 2>/dev/null)
+}
+
+changed_marker_sources() {
+    local previous_state_file="$1"
+    local current_state_file="$2"
+    python3 - "$previous_state_file" "$current_state_file" <<'PY_STATE'
+from pathlib import Path
+import sys
+
+def load(path):
+    p = Path(path)
+    out = {}
+    if not p.is_file():
+        return out
+    for raw in p.read_text(encoding='utf-8').splitlines():
+        if not raw:
+            continue
+        digest, rel = raw.split('\t', 1)
+        out[rel] = digest
+    return out
+
+old = load(sys.argv[1])
+new = load(sys.argv[2])
+for rel in sorted(set(old) | set(new), key=str.casefold):
+    if old.get(rel) != new.get(rel):
+        print(rel)
+PY_STATE
+}
+
 
 replace_between_markers() {
     local target_file="$1"
@@ -411,6 +475,8 @@ process_module_plugins() {
     local marker_ld="${module_dir}/plgmarkers.ld"
     local config_state="${STATE_DIR}/${module_name}.config.sha256"
     local marker_state="${STATE_DIR}/${module_name}.markers.sha256"
+    local marker_source_state="${STATE_DIR}/${module_name}.marker-sources.tsv"
+    local marker_compiler_state="${STATE_DIR}/${module_name}.marker-compiler.sha256"
     local config_fp
     local previous_config_fp
     local old_ld_hash
@@ -572,10 +638,6 @@ process_module_plugins() {
                 fi
             done
 
-            if [[ "$found" != true ]]; then
-                echo "bad allowed_refs for $pid in ${module_name}: unknown plugin '$ref'"
-                exit 1
-            fi
         done
 
         if [[ "$ref_count" -gt "$MAX_ALLOWED_REFS" ]]; then
@@ -691,8 +753,8 @@ process_module_plugins() {
     rm -f "$ld_tmp" "$py_tmp"
 
     if [[ "$(sha256_file_or_missing "$ld_file")" != "$old_ld_hash" ]]; then
-        MODULE_CLEAN_REQUIRED["$module_name"]=true
-        BUILD_REASONS+=("${module_name}: plugin linker layout changed")
+        MODULE_RELINK_REQUIRED["$module_name"]=true
+        BUILD_REASONS+=("${module_name}: plugin linker layout changed; relink only")
     fi
 
     if [[ "$(sha256_file_or_missing "$create3nx_file")" != "$old_py_hash" ]]; then
@@ -706,18 +768,48 @@ process_module_plugins() {
 
     local marker_fp
     local previous_marker_fp
+    local marker_source_fp_text
+    local marker_compiler_fp
+    local previous_marker_compiler_fp
+    local marker_source_tmp
     marker_fp="$(python3 "$marker_script" --fingerprint)"
     previous_marker_fp="$(read_state "$marker_state")"
+    marker_source_fp_text="$(python3 "$marker_script" --source-fingerprints)"
+    marker_compiler_fp="$(python3 "$marker_script" --compiler-plugin-fingerprint)"
+    previous_marker_compiler_fp="$(read_state "$marker_compiler_state")"
     MODULE_MARKER_FP["$module_name"]="$marker_fp"
+    MODULE_MARKER_SOURCE_STATE["$module_name"]="$marker_source_fp_text"
+    MODULE_MARKER_COMPILER_FP["$module_name"]="$marker_compiler_fp"
+
+    marker_source_tmp="$(mktemp)"
+    printf '%s' "$marker_source_fp_text" > "$marker_source_tmp"
 
     if [[ "$marker_fp" != "$previous_marker_fp" || ! -f "$marker_ld" ]]; then
         echo "${module_name}: semantic marker state changed; preparing linker placeholders"
         (cd "$module_dir" && python3 gen_plgmarkers.py --prepare)
-        MODULE_CLEAN_REQUIRED["$module_name"]=true
-        BUILD_REASONS+=("${module_name}: semantic markers changed")
+        MODULE_RELINK_REQUIRED["$module_name"]=true
+        BUILD_REASONS+=("${module_name}: semantic markers changed; selective recompile + relink")
+
+        if [[ "$marker_compiler_fp" != "$previous_marker_compiler_fp" ]]; then
+            echo "${module_name}: semantic GCC marker plugin changed; rebuilding compiler plugin"
+            make -C "${ROOT_DIR}/sysplugin" tools
+            MODULE_MARKER_COMPILER_CHANGED["$module_name"]=true
+            echo "${module_name}: invalidating C/C++ objects; preserving assembly/data objects"
+            invalidate_all_marker_compiled_objects "$module_name"
+            BUILD_NOTES+=("${module_name}: semantic GCC marker plugin changed; C/C++ sources will recompile, assembly/data objects preserved")
+        else
+            local changed_marker_source
+            while IFS= read -r changed_marker_source; do
+                [[ -z "$changed_marker_source" ]] && continue
+                echo "${module_name}: invalidating marked source object: ${changed_marker_source}"
+                invalidate_module_object "$module_name" "$changed_marker_source"
+            done < <(changed_marker_sources "$marker_source_state" "$marker_source_tmp")
+        fi
     else
         echo "${module_name}: semantic marker source unchanged"
     fi
+
+    rm -f -- "$marker_source_tmp"
 }
 
 normalize_stack_priority() {
@@ -1225,7 +1317,7 @@ total_emit_count=$((MODULE_EMIT_COUNTS[rosalina] + MODULE_EMIT_COUNTS[loader]))
 if [[ "$total_emit_count" -eq 0 && "$total_config_count" -eq 0 ]]; then
     printf 'No module plugins configured; completed .3nx files will be used for configured metadata/stack operations.\n\n'
 elif [[ ${#BUILD_REASONS[@]} -gt 0 ]]; then
-    printf 'Clean module build required:\n'
+    printf 'Selective rebuild/relink required:\n'
     for reason in "${BUILD_REASONS[@]}"; do
         printf '  - %s\n' "$reason"
     done
@@ -1257,16 +1349,28 @@ LUMA_VERSION_BUILD="$(read_version_var LUMA_VERSION_BUILD)"
 
 build_module_elf() {
     local module_name="$1"
-    local clean_required="${MODULE_CLEAN_REQUIRED[$module_name]}"
+    local relink_required="${MODULE_RELINK_REQUIRED[$module_name]}"
 
-    if [[ "$clean_required" == true ]]; then
-        printf 'Cleaning %s...\n' "$module_name"
-        make -C "./sysmodules/${module_name}" clean
+    if [[ "$relink_required" == true ]]; then
+        printf 'Relinking %s while preserving reusable objects...\n' "$module_name"
+        rm -f -- "./sysmodules/${module_name}/${module_name}.elf"
     else
         printf 'Building %s ELF...\n' "$module_name"
     fi
 
-    make -C "./sysmodules/${module_name}" elf \
+    local marker_make_override=()
+    if [[ "${MODULE_MARKER_COMPILER_CHANGED[$module_name]}" == true ]]; then
+        local marker_plugin_path="${ROOT_DIR}/sysplugin/build/semantic_marker_plugin.so"
+        # The recursive module Makefile currently lists the semantic GCC plugin as a
+        # prerequisite of every source object, including assembly.  We already rebuilt
+        # the plugin above and explicitly removed every C/C++ object whose semantic
+        # manifest depends on it.  Treat the plugin as an old prerequisite in the
+        # recursive make so unrelated assembly objects are not rebuilt solely because
+        # the .so acquired a newer timestamp.
+        marker_make_override+=("MAKE=make --old-file=${marker_plugin_path}")
+    fi
+
+    make -C "./sysmodules/${module_name}" elf "${marker_make_override[@]}" \
         NEXUS_VERSION_MAJOR="$NEXUS_VERSION_MAJOR" \
         NEXUS_VERSION_MINOR="$NEXUS_VERSION_MINOR" \
         NEXUS_VERSION_BUILD="$NEXUS_VERSION_BUILD" \
@@ -1460,6 +1564,8 @@ trap - EXIT
 for module_name in "${!MODULE_CONFIG_FP[@]}"; do
     write_state "${STATE_DIR}/${module_name}.config.sha256" "${MODULE_CONFIG_FP[$module_name]}"
     write_state "${STATE_DIR}/${module_name}.markers.sha256" "${MODULE_MARKER_FP[$module_name]}"
+    write_state "${STATE_DIR}/${module_name}.marker-sources.tsv" "${MODULE_MARKER_SOURCE_STATE[$module_name]}"
+    write_state "${STATE_DIR}/${module_name}.marker-compiler.sha256" "${MODULE_MARKER_COMPILER_FP[$module_name]}"
 done
 
 if [[ ${#PUBLISHED_OUTPUTS[@]} -eq 0 ]]; then

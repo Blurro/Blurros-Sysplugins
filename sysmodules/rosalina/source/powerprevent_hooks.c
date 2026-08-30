@@ -16,56 +16,20 @@ extern u32 PLUGIN_powr_ScanAndUpdate(void);
 #define POWR_HOST__menuCombo                 ((u32)pluginTable_powr[1])
 #define POWR_HOST__svcMapProcessMemoryEx     ((Result (*)(Handle, u32, Handle, u32, u32, MapExFlags))pluginTable_powr[6])
 #define POWR_HOST__svcUnmapProcessMemoryEx   ((Result (*)(Handle, u32, u32))pluginTable_powr[7])
-#define POWR_HOST__svcQueryMemory            ((Result (*)(MemInfo *, PageInfo *, u32))pluginTable_powr[8])
+#define POWR_MENU__FindFreeRange             ((bool (*)(u32, u32 *))pluginTable_powr[8])
 #define POWR_HOST__svcFlushEntireDataCache   ((void (*)(void))pluginTable_powr[9])
 #define POWR_HOST__svcInvalidateEntireInstructionCache ((void (*)(void))pluginTable_powr[10])
 
 PLUGIN_BSS(powr) u32 powerprevent_menu_combo_addr;
 PLUGIN_BSS(powr) u32 powerprevent_hook_return_addr;
 
-PLUGIN_CODE(powr) static bool PLUGIN_powr_FindFreePage(u32 *outBase)
-{
-    MemInfo mi;
-    PageInfo pi;
-    u32 scan = POWR_SCRATCH_LOW;
-
-    while (scan < POWR_SCRATCH_HIGH)
-    {
-        if (R_FAILED(POWR_HOST__svcQueryMemory(&mi, &pi, scan)))
-            return false;
-
-        u32 regionEnd = mi.base_addr + mi.size;
-        if (regionEnd <= scan)
-            return false;
-
-        if (mi.state == MEMSTATE_FREE)
-        {
-            u32 base = (mi.base_addr + 0xFFFu) & ~0xFFFu;
-
-            if (base < POWR_SCRATCH_LOW)
-                base = POWR_SCRATCH_LOW;
-
-            if (base < POWR_SCRATCH_HIGH &&
-                0x1000u <= POWR_SCRATCH_HIGH - base &&
-                0x1000u <= regionEnd - base)
-            {
-                *outBase = base;
-                return true;
-            }
-        }
-
-        scan = regionEnd;
-    }
-
-    return false;
-}
 
 PLUGIN_CODE(powr) static bool PLUGIN_powr_MapPage(u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress)
 {
     u32 base;
     u32 page = sourceAddress & ~0xFFFu;
 
-    if (!mappedBase || !mappedAddress || !PLUGIN_powr_FindFreePage(&base))
+    if (!mappedBase || !mappedAddress || !POWR_MENU__FindFreeRange(0x1000u, &base))
         return false;
 
     if (R_FAILED(POWR_HOST__svcMapProcessMemoryEx(

@@ -92,11 +92,11 @@ skipSpent:
     add     r7, r7, #4            @ r7 = &coinRec
     ldr     r10, [r7]             @ r6 = coinRec
     cmp     r10, r5
-    subhi   r10, r10, r5          @ if coinRec > spent
-    movls   r10, #0               @ else clamp to 0
+    movlo   r5, r10               @ only legitimate tracked coins count as spent
+    sub     r10, r10, r5
     str     r10, [r7]             @ store updated coinRec
 
-    @ increment coinsEverSpent by coinsSpent
+    @ increment coinsEverSpent by legitimate coinsSpent
     ldr     r8, [r9, #4]          @ g_coinBin addr
     add     r8, r8, #12           @ point to coinsEverSpent
     ldr     r7, [r8]

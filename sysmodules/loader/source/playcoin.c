@@ -11,7 +11,22 @@
 #define PLUGIN_DATA(id)   __attribute__((section(".plugindata_" #id), used))
 #define PLUGIN_BSS(id)    __attribute__((section(".pluginbss_" #id), used))
 
+#define COIN_FILE_BASE_SIZE              0x20u
+#define COIN_FILE_EXTENSION_OFFSET       0x20u
+#define COIN_FILE_EXTENSION_WORDS        7u
+#define COIN_FILE_ACHIEVEMENT_OFFSET     0x40u
+#define COIN_FILE_NO_ACHIEVEMENT_SIZE    0x40u
+#define COIN_FILE_WITH_ACHIEVEMENT_SIZE  0x48u
+#define COIN_FILE_EXTENSION_SEED         0x31445843u
+#define COIN_EXT_BLACKJACK_COUNTERS_WORD 0u
+#define COIN_EXT_BLACKJACK_SURPLUS_WORD  1u
+#define COIN_EXT_TODAY_WORD              6u
+#define COIN_BLACKJACK_COUNTER_MAX       30000u
+#define COIN_ACHIEVEMENT_MASK            0x0003FFFFu
+
 extern u32 coin_loader_home_patch;
+extern u32 coin_loader_createcodeset_call;
+extern u32 coin_loader_createprocess_call;
 extern bool PLUGIN_coin_InstallHooks(void);
 extern Result PLUGIN_coin_svcSendSyncRequest(Handle handle);
 
@@ -23,6 +38,9 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)FSFILE_Close,
     (void*)fsMakePath,
     (void*)&coin_loader_home_patch,
+    (void*)&coin_loader_createcodeset_call,
+    (void*)&coin_loader_createprocess_call,
+    (void*)FSFILE_GetSize,
 };
 
 #define COIN_HOST__FSUSER_OpenArchive  ((Result(*)(FS_Archive*,FS_ArchiveID,FS_Path))pluginTable_coin[0])
@@ -31,6 +49,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_HOST__FSFILE_Read         ((Result(*)(Handle,u32*,u64,void*,u32))pluginTable_coin[3])
 #define COIN_HOST__FSFILE_Close        ((Result(*)(Handle))pluginTable_coin[4])
 #define COIN_HOST__fsMakePath          ((FS_Path(*)(FS_PathType,const void*))pluginTable_coin[5])
+#define COIN_HOST__FSFILE_GetSize      ((Result(*)(Handle,u64*))pluginTable_coin[9])
 
 PLUGIN_RODATA(coin) static const char g_coinFilePath[] = "/luma/coins.bin";
 PLUGIN_RODATA(coin) static const char g_gameCoinPath[] = "/gamecoin.dat";
@@ -39,8 +58,6 @@ PLUGIN_RODATA(coin) static const u32 g_gameCoinArchivePath[3] = {
     0xF000000Bu,
     0x00048000u,
 };
-
-PLUGIN_BSS(coin) static bool g_coinDecryptFailed;
 
 PLUGIN_CODE(coin) static Result PLUGIN_coin_FSFILE_Write(
     Handle file,
@@ -82,18 +99,117 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_Checksum(u32 value, u32 key)
     return value;
 }
 
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_Decrypt(u32 enc, u32 chk, u32 key)
+PLUGIN_CODE(coin) static bool PLUGIN_coin_Decrypt(
+    u32 enc,
+    u32 chk,
+    u32 key,
+    u32 *outValue
+)
 {
     u32 value = (enc & 0xFFFF0000u) | ((enc - (chk >> 16)) & 0xFFFFu);
     value = value - chk * 2u - key;
 
     if (chk != PLUGIN_coin_Checksum(value, key))
+        return false;
+
+    *outValue = value ^ key;
+    return true;
+}
+
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_SaturatingAdd(u32 left, u32 right)
+{
+    u32 sum = left + right;
+    return sum < left ? 0xFFFFFFFFu : sum;
+}
+
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_ExtendedDataChecksum(
+    const u32 *data,
+    u32 key
+)
+{
+    u32 checksum = key ^ COIN_FILE_EXTENSION_SEED;
+    for (u32 i = 0; i < COIN_FILE_EXTENSION_WORDS; i++)
+        checksum = PLUGIN_coin_Checksum(data[i] ^ i, checksum ^ key);
+    return checksum;
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_DecryptExtendedData(
+    const u32 *stored,
+    u32 key,
+    u32 *data
+)
+{
+    u32 stream = key ^ COIN_FILE_EXTENSION_SEED;
+    for (u32 i = 0; i < COIN_FILE_EXTENSION_WORDS; i++)
     {
-        g_coinDecryptFailed = true;
+        stream = PLUGIN_coin_Checksum(stream ^ i, key);
+        data[i] = stored[i] ^ stream;
+    }
+
+    return stored[COIN_FILE_EXTENSION_WORDS] ==
+        PLUGIN_coin_ExtendedDataChecksum(data, key);
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateExtendedData(const u32 *data)
+{
+    u32 counters = data[COIN_EXT_BLACKJACK_COUNTERS_WORD];
+    u32 deposited = counters & 0xFFFFu;
+    u32 qualified = counters >> 16;
+
+    return deposited <= COIN_BLACKJACK_COUNTER_MAX &&
+        qualified <= deposited &&
+        (data[COIN_EXT_TODAY_WORD] & 0xFFFF0000u) == 0;
+}
+
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_ReadBlackjackSurplus(
+    Handle file,
+    u64 fileSize,
+    u32 key
+)
+{
+    if (fileSize != COIN_FILE_NO_ACHIEVEMENT_SIZE &&
+        fileSize != COIN_FILE_WITH_ACHIEVEMENT_SIZE)
+    {
         return 0;
     }
 
-    return value ^ key;
+    u32 stored[COIN_FILE_EXTENSION_WORDS + 1u];
+    u32 data[COIN_FILE_EXTENSION_WORDS];
+    u32 read = 0;
+    if (R_FAILED(COIN_HOST__FSFILE_Read(
+            file,
+            &read,
+            COIN_FILE_EXTENSION_OFFSET,
+            stored,
+            sizeof(stored))) ||
+        read != sizeof(stored) ||
+        !PLUGIN_coin_DecryptExtendedData(stored, key, data) ||
+        !PLUGIN_coin_ValidateExtendedData(data))
+    {
+        return 0;
+    }
+
+    if (fileSize == COIN_FILE_WITH_ACHIEVEMENT_SIZE)
+    {
+        u32 achievement[2];
+        u32 mask = 0;
+        read = 0;
+        if (R_FAILED(COIN_HOST__FSFILE_Read(
+                file,
+                &read,
+                COIN_FILE_ACHIEVEMENT_OFFSET,
+                achievement,
+                sizeof(achievement))) ||
+            read != sizeof(achievement) ||
+            !PLUGIN_coin_Decrypt(
+                achievement[0], achievement[1], key, &mask) ||
+            (mask & ~COIN_ACHIEVEMENT_MASK))
+        {
+            return 0;
+        }
+    }
+
+    return data[COIN_EXT_BLACKJACK_SURPLUS_WORD];
 }
 
 PLUGIN_CODE(coin) static Result PLUGIN_coin_GetPlayCoins(u16 *out)
@@ -158,7 +274,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_ClearTransientHomePointer(void)
         return;
     }
 
-    // if the patch isn't applied, ensure coins.bin pointer states 0x0 for when rosalina checks it
+    // Only failure paths need to invalidate the previous Home Menu pointer.
     if (R_SUCCEEDED(COIN_HOST__FSUSER_OpenFile(
         &file,
         sd,
@@ -168,7 +284,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_ClearTransientHomePointer(void)
     )))
     {
         u32 zero = 0;
-        PLUGIN_coin_FSFILE_Write(file, &written, 4, &zero, sizeof(zero), FS_WRITE_FLUSH);
+        PLUGIN_coin_FSFILE_Write(file, &written, 4, &zero, sizeof(zero), 0);
         COIN_HOST__FSFILE_Close(file);
     }
 
@@ -191,7 +307,6 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     Handle file;
     Result rc;
     u32 written;
-    u32 coins;
 
     rc = COIN_HOST__FSUSER_OpenArchive(&sd, ARCHIVE_SDMC, COIN_HOST__fsMakePath(PATH_EMPTY, NULL));
     if (R_FAILED(rc))
@@ -210,13 +325,28 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
         return false;
     }
 
+    // Read the complete original 32-byte state in one IPC instead of three.
+    u32 base[8];
+    volatile u32 *baseWords = base;
+    for (u32 i = 0; i < 8u; i++)
+        baseWords[i] = 0;
+
     u32 read = 0;
-    COIN_HOST__FSFILE_Read(file, &read, 0, &coins, sizeof(coins));
-    if (read != sizeof(coins))
+    rc = COIN_HOST__FSFILE_Read(file, &read, 0, base, sizeof(base));
+    bool baseReadSucceeded = R_SUCCEEDED(rc);
+    u64 fileSize = 0;
+    bool sizeValid = R_SUCCEEDED(COIN_HOST__FSFILE_GetSize(file, &fileSize));
+
+    u32 coins;
+    if (R_SUCCEEDED(rc) && read >= sizeof(u32))
     {
-        // file doesn't exist, create it with system value
+        coins = base[0];
+    }
+    else
+    {
+        // file doesn't exist yet, create its wallet value from the system value
         coins = *coinDat;
-        rc = PLUGIN_coin_FSFILE_Write(file, &written, 0, &coins, sizeof(coins), FS_WRITE_FLUSH);
+        rc = PLUGIN_coin_FSFILE_Write(file, &written, 0, &coins, sizeof(coins), 0);
         if (R_FAILED(rc) || written != sizeof(coins))
         {
             COIN_HOST__FSFILE_Close(file);
@@ -225,14 +355,15 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
         }
     }
 
-    // write the offset in homemenu that coin pointers are stored at
+    // Publish the new pointer directly. Closing this handle completes the write
+    // before Home Menu is released, so a forced media flush is unnecessary here.
     rc = PLUGIN_coin_FSFILE_Write(
         file,
         &written,
         4,
         &homePointer,
         sizeof(homePointer),
-        FS_WRITE_FLUSH
+        0
     );
     if (R_FAILED(rc) || written != sizeof(homePointer))
     {
@@ -241,56 +372,50 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
         return false;
     }
 
-    coinData[0] = coins;
+    // A valid extension contributes only its lifetime net withdrawn Blackjack
+    // surplus. Any missing or malformed suffix is treated as an empty suffix;
+    // Rosalina performs the corresponding on-disk recovery before saving.
+    u32 lifetimeEarned = 0;
+    u32 lifetimeSpent = 0;
+    bool baseValid = sizeValid && fileSize >= COIN_FILE_BASE_SIZE &&
+        baseReadSucceeded && read == sizeof(base) &&
+        base[0] <= 30000u && base[7] <= 30000u &&
+        PLUGIN_coin_Decrypt(base[2], base[3], base[4], &lifetimeEarned) &&
+        PLUGIN_coin_Decrypt(base[5], base[6], base[4], &lifetimeSpent);
 
-    // fetch recCoin, trueCoin, coins ever spent
-    u32 data[5];
-    u32 read2;
-    rc = COIN_HOST__FSFILE_Read(file, &read2, 8, data, sizeof(data));
-
-    if (R_SUCCEEDED(rc) && read2 == sizeof(data))
+    if (baseValid)
     {
-        g_coinDecryptFailed = false;
-        coinData[3] = PLUGIN_coin_Decrypt(data[3], data[4], data[2]);
-        if (!g_coinDecryptFailed)
-            coinData[2] = PLUGIN_coin_Decrypt(data[0], data[1], data[2]);
+        u32 blackjackSurplus = PLUGIN_coin_ReadBlackjackSurplus(
+            file,
+            fileSize,
+            base[4]
+        );
+        u32 capacity = PLUGIN_coin_SaturatingAdd(lifetimeEarned, blackjackSurplus);
+        if (lifetimeSpent > capacity)
+            lifetimeSpent = capacity;
 
-        if (g_coinDecryptFailed)
-        {
-            coinData[2] = *coinDat;
-            coinData[3] = 0;
-        }
-
-        if (coinData[3] > coinData[2]) // shouldnt be possible but guard
-            coinData[3] = coinData[2];
-
-        // recommended coins update (unencrypted)
-        u32 recommended;
-        u32 read3;
-        rc = COIN_HOST__FSFILE_Read(file, &read3, 28, &recommended, sizeof(recommended));
-
-        if (R_SUCCEEDED(rc) && read3 == sizeof(recommended)) // gotta check read size or it 'successfully' returns rec[0] = 0 for some reason
-        {
-            coinData[1] = recommended;
-            if (coinData[1] > coinData[2] - coinData[3])
-                coinData[1] = coinData[2] - coinData[3];
-        }
-        else // file doesnt contain rec value
-        {
-            coinData[1] = coinData[2] - coinData[3];
-        }
+        coinData[2] = lifetimeEarned;
+        coinData[3] = lifetimeSpent;
+        coinData[1] = base[7];
+        u32 available = capacity - lifetimeSpent;
+        if (coinData[1] > available)
+            coinData[1] = available;
+        if (coinData[1] > 30000u)
+            coinData[1] = 30000u;
     }
     else
     {
-        coinData[2] = *coinDat; // rosalina side handles file writing if not exist
+        coins = *coinDat;
+        coinData[2] = *coinDat;
         coinData[3] = 0;
-        coinData[1] = coinData[2] - coinData[3];
+        coinData[1] = coinData[2];
     }
+    coinData[0] = coins;
 
     COIN_HOST__FSFILE_Close(file);
     COIN_HOST__FSUSER_CloseArchive(sd);
 
-    // prep coinsDat to increase by the amount coinsBin would've decreased by (makes homemenu hook set coinsSpent properly)
+    // prep coinsDat to increase by the amount coinsBin would've decreased by
     if (coins < 300)
         coins = *coinDat;
     else

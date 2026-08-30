@@ -1,6 +1,7 @@
 #include <3ds.h>
 #include "memory.h"
 #include "menu.h"
+#include "sysplugin_menu.h"
 #include "service_manager.h"
 #include "MyThread.h"
 #include "draw.h"
@@ -23,8 +24,6 @@ typedef struct
 {
     u32 version;
     u32 menuTextEnabled;
-    u32 expectedEnvLo;
-    u32 expectedEnvHi;
 } BlurMenuSettings;
 
 typedef struct BlurFeatureRegistration
@@ -35,19 +34,11 @@ typedef struct BlurFeatureRegistration
     struct BlurFeatureRegistration *next;
 } BlurFeatureRegistration;
 
-typedef struct PluginMenuRegistration
-{
-    u32 pluginId;
-    const char *title;
-    void (*callback)(void);
-    u32 color;
-    struct PluginMenuRegistration *next;
-} PluginMenuRegistration;
 
 #define BLUR_SCRATCH_LOW  0x10000000u
 #define BLUR_SCRATCH_HIGH 0x14000000u
 #define BLUR_PLUGIN_ID     0x72756C62u
-#define BLUR_SETTINGS_VERSION 2u
+#define BLUR_SETTINGS_VERSION 4u
 
 extern bool preTerminationRequested;
 extern Handle preTerminationEvent;
@@ -56,16 +47,6 @@ extern u32 blur_marker_menudraw_end;
 extern u32 blur_marker_menu_entered;
 extern u32 blur_marker_menu_leaving;
 extern u64 __aeabi_uldivmod(u64 numerator, u64 denominator);
-extern bool PLUGIN_MENU_AddItem(
-    PluginMenuRegistration *item,
-    u32 pluginId,
-    const char *title,
-    void (*callback)(void),
-    u32 color
-);
-extern bool PLUGIN_MENU_SaveData(u32 pluginId, const void *data, u32 size);
-extern bool PLUGIN_MENU_LoadData(u32 pluginId, void *data, u32 size);
-extern u64 PLUGIN_MENU_expectedEnv;
 
 PLUGIN_DATA(blur) void* pluginTable_blur[] = {
     (void*)isServiceUsable,
@@ -77,7 +58,6 @@ PLUGIN_DATA(blur) void* pluginTable_blur[] = {
     (void*)svcFlushEntireDataCache,
     (void*)svcMapProcessMemoryEx,
     (void*)svcUnmapProcessMemoryEx,
-    (void*)svcQueryMemory,
     (void*)&blur_marker_menudraw_start,
     (void*)&blur_marker_menudraw_end,
     (void*)Draw_DrawFormattedString,
@@ -102,7 +82,8 @@ PLUGIN_DATA(blur) void* pluginTable_blur[] = {
     (void*)&menuShouldExit,
     (void*)PLUGIN_MENU_SaveData,
     (void*)PLUGIN_MENU_LoadData,
-    (void*)&PLUGIN_MENU_expectedEnv
+    (void*)PLUGIN_MENU_AddOnlineEntry,
+    (void*)PLUGIN_MENU_FindFreeRange
 };
 #define BLUR_HOST__isServiceUsable                  ((bool(*)(const char*))pluginTable_blur[0])
 #define BLUR_HOST__svcSleepThread                   ((void(*)(s64))pluginTable_blur[1])
@@ -112,31 +93,31 @@ PLUGIN_DATA(blur) void* pluginTable_blur[] = {
 #define BLUR_HOST__preTerminationEvent              (*(volatile Handle*)pluginTable_blur[5])
 #define BLUR_HOST__svcMapProcessMemoryEx            ((Result(*)(Handle,u32,Handle,u32,u32,MapExFlags))pluginTable_blur[7])
 #define BLUR_HOST__svcUnmapProcessMemoryEx          ((Result(*)(Handle,u32,u32))pluginTable_blur[8])
-#define BLUR_HOST__svcQueryMemory                   ((Result(*)(MemInfo*,PageInfo*,u32))pluginTable_blur[9])
-#define BLUR_HOST__blur_marker_menudraw_start       ((u32)pluginTable_blur[10])
-#define BLUR_HOST__blur_marker_menudraw_end         ((u32)pluginTable_blur[11])
-#define BLUR_HOST__Draw_DrawFormattedString         ((void(*)(u32,u32,u32,const char*,...))pluginTable_blur[12])
-#define BLUR_HOST__blur_marker_menu_entered         ((u32)pluginTable_blur[13])
-#define BLUR_HOST__blur_marker_menu_leaving         ((u32)pluginTable_blur[14])
-#define BLUR_HOST__Draw_SetupFramebuffer            ((void(*)(void))pluginTable_blur[15])
-#define BLUR_HOST__Draw_RestoreFramebuffer          ((void(*)(void))pluginTable_blur[16])
-#define BLUR_HOST__Draw_FreeFramebufferCache        ((void(*)(void))pluginTable_blur[17])
-#define BLUR_HOST__udiv64                           ((u64(*)(u64,u64))pluginTable_blur[19])
-#define BLUR_HOST__svcCreateEvent                   ((Result(*)(Handle*,ResetType))pluginTable_blur[20])
-#define BLUR_HOST__svcSignalEvent                   ((Result(*)(Handle))pluginTable_blur[21])
-#define BLUR_HOST__svcWaitSynchronizationN          ((Result(*)(s32*,const Handle*,s32,bool,s64))pluginTable_blur[22])
-#define BLUR_HOST__svcCloseHandle                   ((Result(*)(Handle))pluginTable_blur[23])
-#define BLUR_MENU__AddItem                          ((bool(*)(PluginMenuRegistration*,u32,const char*,void(*)(void),u32))pluginTable_blur[24])
-#define BLUR_HOST__Draw_Lock                        ((void(*)(void))pluginTable_blur[25])
-#define BLUR_HOST__Draw_Unlock                      ((void(*)(void))pluginTable_blur[26])
-#define BLUR_HOST__Draw_ClearFramebuffer            ((void(*)(void))pluginTable_blur[27])
-#define BLUR_HOST__Draw_DrawString                  ((u32(*)(u32,u32,u32,const char*))pluginTable_blur[28])
-#define BLUR_HOST__Draw_FlushFramebuffer            ((void(*)(void))pluginTable_blur[29])
-#define BLUR_HOST__waitInputWithTimeout             ((u32(*)(s32))pluginTable_blur[30])
-#define BLUR_HOST__menuShouldExit                   (*(bool*)pluginTable_blur[31])
-#define BLUR_MENU__SaveData                         ((bool(*)(u32,const void*,u32))pluginTable_blur[32])
-#define BLUR_MENU__LoadData                         ((bool(*)(u32,void*,u32))pluginTable_blur[33])
-#define BLUR_MENU__expectedEnv                       (*(const u64*)pluginTable_blur[34])
+#define BLUR_HOST__blur_marker_menudraw_start       ((u32)pluginTable_blur[9])
+#define BLUR_HOST__blur_marker_menudraw_end         ((u32)pluginTable_blur[10])
+#define BLUR_HOST__Draw_DrawFormattedString         ((void(*)(u32,u32,u32,const char*,...))pluginTable_blur[11])
+#define BLUR_HOST__blur_marker_menu_entered         ((u32)pluginTable_blur[12])
+#define BLUR_HOST__blur_marker_menu_leaving         ((u32)pluginTable_blur[13])
+#define BLUR_HOST__Draw_SetupFramebuffer            ((void(*)(void))pluginTable_blur[14])
+#define BLUR_HOST__Draw_RestoreFramebuffer          ((void(*)(void))pluginTable_blur[15])
+#define BLUR_HOST__Draw_FreeFramebufferCache        ((void(*)(void))pluginTable_blur[16])
+#define BLUR_HOST__udiv64                           ((u64(*)(u64,u64))pluginTable_blur[18])
+#define BLUR_HOST__svcCreateEvent                   ((Result(*)(Handle*,ResetType))pluginTable_blur[19])
+#define BLUR_HOST__svcSignalEvent                   ((Result(*)(Handle))pluginTable_blur[20])
+#define BLUR_HOST__svcWaitSynchronizationN          ((Result(*)(s32*,const Handle*,s32,bool,s64))pluginTable_blur[21])
+#define BLUR_HOST__svcCloseHandle                   ((Result(*)(Handle))pluginTable_blur[22])
+#define BLUR_MENU__AddItem                          ((bool(*)(PluginMenuRegistration*,u32,const char*,void(*)(void),u32))pluginTable_blur[23])
+#define BLUR_HOST__Draw_Lock                        ((void(*)(void))pluginTable_blur[24])
+#define BLUR_HOST__Draw_Unlock                      ((void(*)(void))pluginTable_blur[25])
+#define BLUR_HOST__Draw_ClearFramebuffer            ((void(*)(void))pluginTable_blur[26])
+#define BLUR_HOST__Draw_DrawString                  ((u32(*)(u32,u32,u32,const char*))pluginTable_blur[27])
+#define BLUR_HOST__Draw_FlushFramebuffer            ((void(*)(void))pluginTable_blur[28])
+#define BLUR_HOST__waitInputWithTimeout             ((u32(*)(s32))pluginTable_blur[29])
+#define BLUR_HOST__menuShouldExit                   (*(bool*)pluginTable_blur[30])
+#define BLUR_MENU__SaveData                         ((bool(*)(u32,const void*,u32))pluginTable_blur[31])
+#define BLUR_MENU__LoadData                         ((bool(*)(u32,void*,u32))pluginTable_blur[32])
+#define BLUR_MENU__AddOnlineEntry                   ((bool(*)(const char*,const char*))pluginTable_blur[33])
+#define BLUR_MENU__FindFreeRange                    ((bool(*)(u32,u32*))pluginTable_blur[34])
 
 PLUGIN_BSS(blur) static MyThread plgThread;
 PLUGIN_BSS(blur) static u8 CTR_ALIGN(8) plgThreadStack[0x1000];
@@ -157,7 +138,7 @@ PLUGIN_BSS(blur) static u32 blurMenuDrawFuncCount;
 PLUGIN_BSS(blur) static BlurFeatureRegistration *g_blurFeatureHead;
 PLUGIN_BSS(blur) static BlurFeatureRegistration *g_blurFeatureTail;
 PLUGIN_DATA(blur) static bool g_blurMenuDrawDebug = false;
-PLUGIN_DATA(blur) static bool g_blurMenuTextEnabled = true;
+PLUGIN_DATA(blur) static bool g_blurMenuTextEnabled = false;
 PLUGIN_BSS(blur) static bool blurCoolThreadCreated;
 PLUGIN_BSS(blur) static volatile bool menuFreeze;
 
@@ -179,7 +160,8 @@ PLUGIN_RODATA(blur) static const char service_cdc[] = "cdc:CHK";
 #define BLUR_BACK_COLOR RGB565(15, 31, 15)
 
 PLUGIN_RODATA(blur) const char g_blurFeatureTitle[] = "Blurro Features Menu";
-PLUGIN_RODATA(blur) static const char g_blurOpenOnlineTitle[] = "Open Online Menu";
+PLUGIN_RODATA(blur) const char g_blurOnlineV1Title[] = "Blurro\'s Sysplugins";
+PLUGIN_RODATA(blur) const char g_blurOnlineV1Url[] = "https://blurro.github.io/sysplugins/online_v1/onlinetemporary.3on";
 PLUGIN_RODATA(blur) static const char g_blurToggleMenuTextOn[] = "Toggle Menu Text: ON";
 PLUGIN_RODATA(blur) static const char g_blurToggleMenuTextOff[] = "Toggle Menu Text: OFF";
 PLUGIN_RODATA(blur) static const char g_blurSelected[] = ">";
@@ -199,44 +181,32 @@ PLUGIN_CODE(blur) void PLUGIN_blur_SetHostIsLuma(bool isLuma)
 }
 
 extern bool PLUGIN_blur_SetMenuTextHookEnabled(bool enabled);
-extern void PLUGIN_blur_OpenOnlineMenu(void);
 
 PLUGIN_CODE(blur) static void PLUGIN_blur_SaveMenuSettings(void)
 {
     if (!BLUR_MENU__SaveData)
         return;
 
-    u64 expectedEnv = BLUR_MENU__expectedEnv;
-    if (!expectedEnv)
-        return;
-
     BlurMenuSettings settings;
     settings.version = BLUR_SETTINGS_VERSION;
     settings.menuTextEnabled = g_blurMenuTextEnabled ? 1u : 0u;
-    settings.expectedEnvLo = (u32)expectedEnv;
-    settings.expectedEnvHi = (u32)(expectedEnv >> 32);
     (void)BLUR_MENU__SaveData(BLUR_PLUGIN_ID, &settings, sizeof(settings));
 }
 
 PLUGIN_CODE(blur) void PLUGIN_blur_LoadMenuSettings(void)
 {
-    g_blurMenuTextEnabled = true;
+    g_blurMenuTextEnabled = false;
 
     if (!BLUR_MENU__LoadData)
         return;
 
-    u64 expectedEnv = BLUR_MENU__expectedEnv;
     BlurMenuSettings settings;
     if (BLUR_MENU__LoadData(BLUR_PLUGIN_ID, &settings, sizeof(settings)) &&
         settings.version == BLUR_SETTINGS_VERSION &&
         settings.menuTextEnabled <= 1u)
     {
-        u64 savedEnv = ((u64)settings.expectedEnvHi << 32) | settings.expectedEnvLo;
-        if (!expectedEnv || savedEnv == expectedEnv)
-        {
-            g_blurMenuTextEnabled = settings.menuTextEnabled != 0;
-            return;
-        }
+        g_blurMenuTextEnabled = settings.menuTextEnabled != 0;
+        return;
     }
 
     PLUGIN_blur_SaveMenuSettings();
@@ -312,7 +282,7 @@ PLUGIN_CODE(blur) bool PLUGIN_blur_AddFeatureItem(
 
 PLUGIN_CODE(blur) static u32 PLUGIN_blur_GetFeatureCount(void)
 {
-    u32 count = 2;
+    u32 count = 1;
     for (BlurFeatureRegistration *item = g_blurFeatureHead; item; item = item->next)
         count++;
     return count;
@@ -320,10 +290,10 @@ PLUGIN_CODE(blur) static u32 PLUGIN_blur_GetFeatureCount(void)
 
 PLUGIN_CODE(blur) static BlurFeatureRegistration *PLUGIN_blur_GetFeatureItem(u32 index)
 {
-    if (index < 2)
+    if (index < 1)
         return NULL;
 
-    index -= 2;
+    index -= 1;
     BlurFeatureRegistration *item = g_blurFeatureHead;
     while (item && index)
     {
@@ -336,8 +306,6 @@ PLUGIN_CODE(blur) static BlurFeatureRegistration *PLUGIN_blur_GetFeatureItem(u32
 PLUGIN_CODE(blur) static const char *PLUGIN_blur_GetFeatureTitle(u32 index)
 {
     if (index == 0)
-        return g_blurOpenOnlineTitle;
-    if (index == 1)
         return g_blurMenuTextEnabled ? g_blurToggleMenuTextOn : g_blurToggleMenuTextOff;
 
     BlurFeatureRegistration *item = PLUGIN_blur_GetFeatureItem(index);
@@ -349,14 +317,13 @@ PLUGIN_CODE(blur) static void PLUGIN_blur_DrawFeatureMenu(u32 selected)
     BLUR_HOST__Draw_Lock();
     BLUR_HOST__Draw_ClearFramebuffer();
     PLUGIN_blur_DrawFeatureFrame(g_blurFeatureTitle);
-    PLUGIN_blur_DrawFeatureItem(40, selected == 0, g_blurOpenOnlineTitle);
     PLUGIN_blur_DrawFeatureItem(
-        55,
-        selected == 1,
+        40,
+        selected == 0,
         g_blurMenuTextEnabled ? g_blurToggleMenuTextOn : g_blurToggleMenuTextOff
     );
 
-    u32 index = 2;
+    u32 index = 1;
     for (BlurFeatureRegistration *item = g_blurFeatureHead; item; item = item->next, index++)
         PLUGIN_blur_DrawFeatureItem(40 + index * 15, selected == index, item->title);
 
@@ -416,8 +383,6 @@ PLUGIN_CODE(blur) void PLUGIN_blur_OpenFeatureMenu(void)
         else if (pressed & KEY_A)
         {
             if (selected == 0u)
-                PLUGIN_blur_OpenOnlineMenu();
-            else if (selected == 1u)
             {
                 bool next = !g_blurMenuTextEnabled;
                 if (PLUGIN_blur_SetMenuTextHookEnabled(next))
@@ -438,51 +403,13 @@ PLUGIN_CODE(blur) void PLUGIN_blur_OpenFeatureMenu(void)
     } while (!BLUR_HOST__menuShouldExit);
 }
 
-PLUGIN_CODE(blur) static bool PLUGIN_blur_FindFreeRange(u32 size, u32 *outBase)
-{
-    MemInfo mi;
-    PageInfo pi;
-    u32 scan = BLUR_SCRATCH_LOW;
-
-    size = (size + 0xFFFu) & ~0xFFFu;
-
-    while (scan < BLUR_SCRATCH_HIGH)
-    {
-        if (R_FAILED(BLUR_HOST__svcQueryMemory(&mi, &pi, scan)))
-            return false;
-
-        u32 regionEnd = mi.base_addr + mi.size;
-        if (regionEnd <= scan)
-            return false;
-
-        if (mi.state == MEMSTATE_FREE)
-        {
-            u32 base = (mi.base_addr + 0xFFFu) & ~0xFFFu;
-
-            if (base < BLUR_SCRATCH_LOW)
-                base = BLUR_SCRATCH_LOW;
-
-            if (base < BLUR_SCRATCH_HIGH &&
-                size <= BLUR_SCRATCH_HIGH - base &&
-                size <= regionEnd - base)
-            {
-                *outBase = base;
-                return true;
-            }
-        }
-
-        scan = regionEnd;
-    }
-
-    return false;
-}
 
 PLUGIN_CODE(blur) bool PLUGIN_blur_MapPage(u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress)
 {
     u32 base;
     u32 page = sourceAddress & ~0xFFFu;
 
-    if (!mappedBase || !mappedAddress || !PLUGIN_blur_FindFreeRange(0x1000, &base))
+    if (!mappedBase || !mappedAddress || !BLUR_MENU__FindFreeRange(0x1000u, &base))
         return false;
 
     if (R_FAILED(BLUR_HOST__svcMapProcessMemoryEx(
@@ -628,6 +555,7 @@ PLUGIN_CODE(blur) bool PLUGIN_blur_AddTickFunc(BlurTickFunc func, s64 intervalNs
     u64 intervalTicks = PLUGIN_blur_NsToTicks((u64)intervalNs);
     u64 tickNow = BLUR_HOST__svcGetSystemTick();
     bool added = false;
+    u32 freeIndex = BLUR_MAX_TICK_FUNCS;
 
     PLUGIN_blur_LockTickRegistry();
 
@@ -640,17 +568,26 @@ PLUGIN_CODE(blur) bool PLUGIN_blur_AddTickFunc(BlurTickFunc func, s64 intervalNs
             added = true;
             break;
         }
+
+        if (!blurTickFuncs[i] && freeIndex == BLUR_MAX_TICK_FUNCS)
+            freeIndex = i;
     }
 
-    if (!added && blurTickFuncCount < BLUR_MAX_TICK_FUNCS)
+    if (!added)
     {
-        u32 index = blurTickFuncCount;
+        if (freeIndex == BLUR_MAX_TICK_FUNCS && blurTickFuncCount < BLUR_MAX_TICK_FUNCS)
+        {
+            freeIndex = blurTickFuncCount;
+            blurTickFuncCount++;
+        }
 
-        blurTickFuncs[index] = func;
-        blurTickIntervalTicks[index] = intervalTicks;
-        blurTickLastRunTicks[index] = tickNow;
-        blurTickFuncCount = index + 1;
-        added = true;
+        if (freeIndex < BLUR_MAX_TICK_FUNCS)
+        {
+            blurTickFuncs[freeIndex] = func;
+            blurTickIntervalTicks[freeIndex] = intervalTicks;
+            blurTickLastRunTicks[freeIndex] = tickNow;
+            added = true;
+        }
     }
 
     PLUGIN_blur_UnlockTickRegistry();
@@ -659,6 +596,38 @@ PLUGIN_CODE(blur) bool PLUGIN_blur_AddTickFunc(BlurTickFunc func, s64 intervalNs
         PLUGIN_blur_WakeTickWorker();
 
     return added;
+}
+
+PLUGIN_CODE(blur) bool PLUGIN_blur_RemoveTickFunc(BlurTickFunc func)
+{
+    if (!func)
+        return false;
+
+    bool removed = false;
+
+    PLUGIN_blur_LockTickRegistry();
+
+    for (u32 i = 0; i < blurTickFuncCount; i++)
+    {
+        if (blurTickFuncs[i] != func)
+            continue;
+
+        blurTickFuncs[i] = NULL;
+        blurTickIntervalTicks[i] = 0;
+        blurTickLastRunTicks[i] = 0;
+        removed = true;
+        break;
+    }
+
+    while (blurTickFuncCount && !blurTickFuncs[blurTickFuncCount - 1u])
+        blurTickFuncCount--;
+
+    PLUGIN_blur_UnlockTickRegistry();
+
+    if (removed)
+        PLUGIN_blur_WakeTickWorker();
+
+    return removed;
 }
 
 PLUGIN_CODE(blur) bool PLUGIN_blur_AddMenuDrawFunc(BlurMenuDrawFunc func)

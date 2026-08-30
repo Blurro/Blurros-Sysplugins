@@ -21,18 +21,21 @@ typedef struct PluginMenuRegistration
 extern void *pluginTable_blur[];
 
 #define BLUR_HOST__svcFlushEntireDataCache          ((void(*)(void))pluginTable_blur[6])
-#define BLUR_HOST__blur_marker_menudraw_start       ((u32)pluginTable_blur[10])
-#define BLUR_HOST__blur_marker_menudraw_end         ((u32)pluginTable_blur[11])
-#define BLUR_HOST__blur_marker_menu_entered         ((u32)pluginTable_blur[13])
-#define BLUR_HOST__blur_marker_menu_leaving         ((u32)pluginTable_blur[14])
-#define BLUR_HOST__Draw_SetupFramebuffer            ((void(*)(void))pluginTable_blur[15])
-#define BLUR_HOST__Draw_RestoreFramebuffer          ((void(*)(void))pluginTable_blur[16])
-#define BLUR_HOST__Draw_FreeFramebufferCache        ((void(*)(void))pluginTable_blur[17])
-#define BLUR_HOST__svcInvalidateEntireInstructionCache ((void(*)(void))pluginTable_blur[18])
-#define BLUR_MENU__AddItem                          ((bool(*)(PluginMenuRegistration*,u32,const char*,void(*)(void),u32))pluginTable_blur[24])
+#define BLUR_HOST__blur_marker_menudraw_start       ((u32)pluginTable_blur[9])
+#define BLUR_HOST__blur_marker_menudraw_end         ((u32)pluginTable_blur[10])
+#define BLUR_HOST__blur_marker_menu_entered         ((u32)pluginTable_blur[12])
+#define BLUR_HOST__blur_marker_menu_leaving         ((u32)pluginTable_blur[13])
+#define BLUR_HOST__Draw_SetupFramebuffer            ((void(*)(void))pluginTable_blur[14])
+#define BLUR_HOST__Draw_RestoreFramebuffer          ((void(*)(void))pluginTable_blur[15])
+#define BLUR_HOST__Draw_FreeFramebufferCache        ((void(*)(void))pluginTable_blur[16])
+#define BLUR_HOST__svcInvalidateEntireInstructionCache ((void(*)(void))pluginTable_blur[17])
+#define BLUR_MENU__AddItem                          ((bool(*)(PluginMenuRegistration*,u32,const char*,void(*)(void),u32))pluginTable_blur[23])
+#define BLUR_MENU__AddOnlineEntry                   ((bool(*)(const char*,const char*))pluginTable_blur[33])
 #define BLUR_PLUGIN_ID                              0x72756C62u
 
 extern const char g_blurFeatureTitle[];
+extern const char g_blurOnlineV1Title[];
+extern const char g_blurOnlineV1Url[];
 extern PluginMenuRegistration g_blurMenuRegistration;
 extern bool PLUGIN_blur_MapPage(u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress);
 extern void PLUGIN_blur_UnmapPage(u32 mappedBase);
@@ -387,6 +390,8 @@ PLUGIN_MAIN(blur) bool PLUGIN_blur_Main(void)
 
     PLUGIN_blur_LoadMenuSettings();
     PLUGIN_blur_SetMenuFreezeInternal(false);
+
+    (void)BLUR_MENU__AddOnlineEntry(g_blurOnlineV1Title, g_blurOnlineV1Url);
 
     if (PLUGIN_blur_IsMenuTextEnabled())
     {

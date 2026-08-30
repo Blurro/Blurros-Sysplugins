@@ -2,21 +2,13 @@
 #include "csvc.h"
 #include "draw.h"
 #include "menu.h"
+#include "sysplugin_menu.h"
 
 #define PLUGIN_CODE(id)   __attribute__((section(".plugin_" #id), used))
 #define PLUGIN_MAIN(id)   __attribute__((section(".plugin_" #id "_entry"), used))
 #define PLUGIN_RODATA(id) __attribute__((section(".pluginrodata_" #id), used))
 #define PLUGIN_DATA(id)   __attribute__((section(".plugindata_" #id), used))
 #define PLUGIN_BSS(id)    __attribute__((section(".pluginbss_" #id), used))
-
-typedef struct PluginMenuRegistration
-{
-    u32 pluginId;
-    const char *title;
-    void (*callback)(void);
-    u32 color;
-    struct PluginMenuRegistration *next;
-} PluginMenuRegistration;
 
 typedef struct
 {
@@ -26,15 +18,6 @@ typedef struct
 
 extern u32 powerprevent_marker_key_scan;
 extern u32 menuCombo;
-extern bool PLUGIN_MENU_AddItem(
-    PluginMenuRegistration *item,
-    u32 pluginId,
-    const char *title,
-    void (*callback)(void),
-    u32 color
-);
-extern bool PLUGIN_MENU_SaveData(u32 pluginId, const void *data, u32 size);
-extern bool PLUGIN_MENU_LoadData(u32 pluginId, void *data, u32 size);
 
 PLUGIN_DATA(powr) void *pluginTable_powr[] = {
     (void *)&powerprevent_marker_key_scan,
@@ -45,7 +28,7 @@ PLUGIN_DATA(powr) void *pluginTable_powr[] = {
     (void *)mcuHwcExit,
     (void *)svcMapProcessMemoryEx,
     (void *)svcUnmapProcessMemoryEx,
-    (void *)svcQueryMemory,
+    (void *)PLUGIN_MENU_FindFreeRange,
     (void *)svcFlushEntireDataCache,
     (void *)svcInvalidateEntireInstructionCache,
     (void *)PLUGIN_MENU_AddItem,
