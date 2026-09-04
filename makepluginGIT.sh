@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$SCRIPT_DIR"
 
 if (( BASH_VERSINFO[0] < 4 )); then
-    printf 'ERROR: makeplugingit.sh requires Bash 4 or newer.\n' >&2
+    printf 'ERROR: makepluginGIT.sh requires Bash 4 or newer.\n' >&2
     exit 1
 fi
 
@@ -114,7 +114,7 @@ STACKED_PLUGIN_CONFIG=(
 # Access host targets through the plugin table; do not use the host symbol directly at runtime.
 # This 'define' trick forces non-relative references, which is VERY IMPORTANT for plugin code to be relocatable
 #
-# Run ./makeplugingit.sh when producing standalone GitHub update payloads. It automatically:
+# Run ./makepluginGIT.sh when producing standalone GitHub update payloads. It automatically:
 # - runs a normal incremental make for plugin-code-only changes
 # - prepares marker placeholders, builds, then resolves semantic marker keys
 # - incrementally recompiles changed marked host sources while preserving unrelated .o files
@@ -141,7 +141,7 @@ total_metadata_count=${#METADATA_CONFIG[@]}
 total_stack_count=${#STACKED_PLUGIN_CONFIG[@]}
 
 if [[ "$total_stack_count" -ne 0 ]]; then
-    printf 'ERROR: makeplugingit.sh only builds standalone GitHub payloads; STACKED_PLUGIN_CONFIG must stay empty.\n' >&2
+    printf 'ERROR: makepluginGIT.sh only builds standalone GitHub payloads; STACKED_PLUGIN_CONFIG must stay empty.\n' >&2
     exit 1
 fi
 
@@ -195,7 +195,6 @@ for entry in sys.argv[1:]:
         path = pathlib.Path(name)
         if not path.exists() or path.read_bytes() != payload:
             path.write_bytes(payload)
-            print(f"Wrote {name} (3NXV, version {version})")
 PY
 }
 
@@ -212,37 +211,35 @@ mkdir -p "$STATE_DIR" "$SEMANTIC_STATE_DIR"
 
 ROOT_DIR="$(pwd -P)"
 
-# A pristine stock+devkit tree has not run sysplugin/build_pair.py yet, so the
-# generated K11 entry aliases included by Loader/Rosalina main.c do not exist.
-# Bootstrap that one header on demand.  If this invocation had to create the
-# heavy temporary K11 build/ELF solely for the bootstrap, remove those heavy
-# artifacts again; keep the tiny generated header for normal incremental builds.
-bootstrap_sysplugin_entry_header() {
+# If this header has not been generated yet, create it before building plugins.
+# Header generation may create temporary K11 build files; remove files created
+# by this invocation afterward and keep the generated header for later builds.
+ensure_sysplugin_entry_header() {
     local entry_header="${ROOT_DIR}/sysplugin/include/SysPluginLoaderEntryGenerated.h"
-    local bootstrap_tool="${ROOT_DIR}/sysplugin/build_pair.py"
+    local build_pair_tool="${ROOT_DIR}/sysplugin/build_pair.py"
     local k11_build_dir="${ROOT_DIR}/k11_extension/build"
     local k11_elf="${ROOT_DIR}/k11_extension/k11_extension.elf"
     local k11_build_existed=0
     local k11_elf_existed=0
 
     [[ -f "$entry_header" ]] && return 0
-    if [[ ! -f "$bootstrap_tool" ]]; then
-        printf 'ERROR: pristine sysplugin bootstrap tool is missing: %s\n' "$bootstrap_tool" >&2
+    if [[ ! -f "$build_pair_tool" ]]; then
+        printf 'ERROR: missing sysplugin/build_pair.py: %s\n' "$build_pair_tool" >&2
         return 1
     fi
 
     [[ -e "$k11_build_dir" ]] && k11_build_existed=1
     [[ -e "$k11_elf" ]] && k11_elf_existed=1
 
-    printf 'Bootstrapping SysPluginLoaderEntryGenerated.h for pristine plugin build...\n'
-    if ! python3 - "$ROOT_DIR" <<'PY_BOOTSTRAP'
+    printf 'Generating SysPluginLoaderEntryGenerated.h for first plugin build...\n'
+    if ! python3 - "$ROOT_DIR" <<'PY_ENTRY_HEADER'
 import pathlib
 import sys
 root = pathlib.Path(sys.argv[1])
 sys.path.insert(0, str(root / "sysplugin"))
 import build_pair
 build_pair.bootstrap_entry_header()
-PY_BOOTSTRAP
+PY_ENTRY_HEADER
     then
         [[ "$k11_build_existed" -eq 1 ]] || rm -rf -- "$k11_build_dir"
         [[ "$k11_elf_existed" -eq 1 ]] || rm -f -- "$k11_elf"
@@ -253,12 +250,12 @@ PY_BOOTSTRAP
     [[ "$k11_elf_existed" -eq 1 ]] || rm -f -- "$k11_elf"
 
     if [[ ! -f "$entry_header" ]]; then
-        printf 'ERROR: pristine sysplugin bootstrap did not produce %s\n' "$entry_header" >&2
+        printf 'ERROR: failed to generate %s\n' "$entry_header" >&2
         return 1
     fi
 }
 
-bootstrap_sysplugin_entry_header
+ensure_sysplugin_entry_header
 
 
 semantic_state_files() {
@@ -1669,4 +1666,4 @@ else
     done
 fi
 
-printf '\nDone. GitHub update payloads are the generated .bin files.\n\n'
+printf '\nDone. Re-run ./makepluginGIT.sh for every GitHub payload build.\n\n'
