@@ -34,13 +34,13 @@ Side note: Do not use Play Coin setters outside of the one provided by this mod!
 * Progressive walking cost (+3 for each coin after the original 10 cap)
 * Tracks genuine walking-backed earnings separately from manually set coins
 * Expanded Play Coin setter and statistics menus
-* Custom notifications for... *secrets* - Club Penguin inspired difficulty tiers
+* Custom notifications for... *secrets* - with Club Penguin inspired difficulty tiers
 * Persistent save data designed to remain compatible as PlayCoinz expands
 * WIP Blackjack casino with gambling lol (walking to the next casino required if you get a backoff)
 
 PlayCoinz patches the Home Menu directly, with the user-facing menus and extra features provided through Rosalina.
 
-Features art by @AnasAbdin for notification top-screen images, huge thanks to him for giving permission to use them!
+Features art by [@AnasAbdin](https://x.com/AnasAbdin) for notification top-screen images, huge thanks to him for giving permission to use them!
 
 ---
 
