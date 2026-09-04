@@ -23,7 +23,6 @@ PLUGIN_coin_change:
     .hword 0
     .hword 0 @ coinsSpent, for coin setter page
     .hword 0 @ coinEarn pre-calc coins
-    .hword 0
 
 .balign 4
 .global PLUGIN_coin_stepDiagnostics
@@ -88,49 +87,89 @@ PLUGIN_coin_homeLoaderPatch:
     cmp     r5, #0x12C            @ 300
     movhi   r5, #0x12C            @ clamp to 300
 skipSpent:
+    @ If Loader had to recover from an invalid tracking base, the current
+    @ gamecoin.dat value is the new tracked baseline. Any apparent decrease
+    @ relative to Loader's temporary coinDat must not be treated as historical
+    @ spending. Bit 15 of Loader-only coinsSpent carries that state until
+    @ Rosalina attaches.
+    ldr     r8, [r9, #8]          @ g_coinChange addr
+    ldrh    r7, [r8, #2]         @ coinsSpent / transient invalid-base marker
+    tst     r7, #0x8000
+    movne   r5, #0
+
     ldr     r7, [r9, #4]          @ g_coinBin addr
     add     r7, r7, #4            @ r7 = &coinRec
-    ldr     r10, [r7]             @ r6 = coinRec
+    ldr     r10, [r7]             @ r10 = coinRec
     cmp     r10, r5
-    movlo   r5, r10               @ only legitimate tracked coins count as spent
+    movlo   r5, r10               @ tracked spend stops when coinsRec reaches zero
     sub     r10, r10, r5
     str     r10, [r7]             @ store updated coinRec
 
-    @ increment coinsEverSpent by legitimate coinsSpent
+    @ increment coinsEverSpent by the tracked portion only
     ldr     r8, [r9, #4]          @ g_coinBin addr
     add     r8, r8, #12           @ point to coinsEverSpent
     ldr     r7, [r8]
-    add     r7, r7, r5            @ coinsEverSpent + coinsSpent
+    add     r7, r7, r5            @ coinsEverSpent + tracked coinsSpent
     str     r7, [r8]
 
-    @ wipe coinsSpent
+    @ wipe coinsSpent, except Loader's pre-attach invalid-base marker. Rosalina
+    @ does not copy this halfword, so its state starts clean after pointer swap.
     ldr     r8, [r9, #8]          @ g_coinEarn addr
     add     r8, r8, #2 		      @ point to coinsSpent
+    ldrh    r7, [r8]
+    tst     r7, #0x8000
+    bne     keepInvalidBaseMarker
     mov     r5, #0
     strh    r5, [r8]              @ set coinsSpent to 0
+keepInvalidBaseMarker:
 @skipEarnDiff:
     ldr     r5, [r9, #4]          @ g_coinBin addr
     ldr     r7, [r5]              @ coinBin (32-bit)
     adr     r5, PLUGIN_coin_binLast
     str     r7, [r5]
 
-    mov     r8, #0x12C            @ 300
-
-    @ if coinBin < 300, jump past
-    cmp     r7, r8
-    ble     setBinToDat
-
-    @ coinBin = coinBin - (300 - coinDat)
-    sub     r7, r7, r8            @ r7 = coinBin - 300
-    add     r7, r7, r6            @ r7 = (coinBin - 300) + coinDat
+    @ An invalid tracking base makes every pre-attach difference historical
+    @ noise. Preserve the standalone wallet itself and apply only coins genuinely
+    @ earned by this Home Menu calculation. This also preserves a wallet BELOW
+    @ current gamecoin.dat instead of silently pulling it upward.
+    ldr     r8, [r9, #8]          @ g_coinChange addr
+    ldrh    r10, [r8, #2]
+    tst     r10, #0x8000
+    beq     validBaseBinLogic
+    sub     r10, r6, r11          @ this hook's genuine earned amount
+    add     r7, r7, r10
+    mov     r6, r7                @ invalid recovery rebases system side to wallet
     b       afterBinLogic
 
-setBinToDat:
-    mov     r7, r6
+validBaseBinLogic:
+    @ For a valid persisted wallet, raw gamecoin.dat increases are NOT trusted
+    @ earnings. Only a raw decrease is historical spending; actual new earnings
+    @ are the increase produced by this Home Menu calculation itself.
+    @
+    @ expectedVanilla = min(starting coinBin, 300)
+    @ historicalSpend = max(expectedVanilla - preCalcGamecoin, 0)
+    @ genuineEarn     = postCalcGamecoin - preCalcGamecoin
+    @ final coinBin   = starting coinBin - historicalSpend + genuineEarn
+    mov     r8, #0x12C            @ 300
+    mov     r10, r7               @ expectedVanilla = starting coinBin
+    cmp     r10, r8
+    movhi   r10, r8               @ expectedVanilla = min(coinBin, 300)
+
+    cmp     r10, r11              @ expectedVanilla vs pre-calc gamecoin
+    subhi   r10, r10, r11         @ historicalSpend if raw gamecoin decreased
+    movls   r10, #0               @ raw increase/equality is ignored
+    sub     r7, r7, r10           @ apply historical wallet spend once
+
+    sub     r10, r6, r11          @ genuine Home Menu earnings this calculation
+    add     r7, r7, r10           @ only genuine earnings may increase wallet
 
 afterBinLogic:
-    @ set coinDat to coinBin clamped to 300
+    mov     r8, #0x12C            @ 300
+    @ Rebase Home Menu's live value to the accepted wallet result. This is
+    @ important when raw gamecoin.dat was mysteriously HIGHER: the increase is
+    @ ignored rather than left live to desync the Home Menu from coinsBin.
     cmp     r7, r8
+    movls   r6, r7
     movhi   r6, r8
 
     @ clamp coinBin to 30k

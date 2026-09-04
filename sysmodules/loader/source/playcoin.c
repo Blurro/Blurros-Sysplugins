@@ -294,6 +294,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_ClearTransientHomePointer(void)
 PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     u16 *coinDat,
     u32 *coinData,
+    u16 *coinChange,
     u32 homePointer
 )
 {
@@ -337,14 +338,18 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     u64 fileSize = 0;
     bool sizeValid = R_SUCCEEDED(COIN_HOST__FSFILE_GetSize(file, &fileSize));
 
+    // Keep the wallet word independent from the encrypted tracking state, as
+    // the original coinscomplete implementation did. A damaged tracking block
+    // must not erase an otherwise sane extended wallet.
+    bool walletValid = baseReadSucceeded && read >= sizeof(u32) && base[0] <= 30000u;
     u32 coins;
-    if (R_SUCCEEDED(rc) && read >= sizeof(u32))
+    if (walletValid)
     {
         coins = base[0];
     }
     else
     {
-        // file doesn't exist yet, create its wallet value from the system value
+        // Missing/invalid wallet: rebuild only the wallet from vanilla state.
         coins = *coinDat;
         rc = PLUGIN_coin_FSFILE_Write(file, &written, 0, &coins, sizeof(coins), 0);
         if (R_FAILED(rc) || written != sizeof(coins))
@@ -379,12 +384,16 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     u32 lifetimeSpent = 0;
     bool baseValid = sizeValid && fileSize >= COIN_FILE_BASE_SIZE &&
         baseReadSucceeded && read == sizeof(base) &&
-        base[0] <= 30000u && base[7] <= 30000u &&
+        walletValid && base[7] <= 30000u &&
         PLUGIN_coin_Decrypt(base[2], base[3], base[4], &lifetimeEarned) &&
         PLUGIN_coin_Decrypt(base[5], base[6], base[4], &lifetimeSpent);
 
     if (baseValid)
     {
+        // Clear any stale pre-attach invalid-baseline marker. The marker lives
+        // only in Loader's coinsSpent halfword and is never copied to Rosalina.
+        coinChange[1] = 0;
+
         u32 blackjackSurplus = PLUGIN_coin_ReadBlackjackSurplus(
             file,
             fileSize,
@@ -405,10 +414,22 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     }
     else
     {
-        coins = *coinDat;
+        // Tracking/provenance is not recoverable. Reset that accounting to the
+        // vanilla baseline, but deliberately keep `coins` if its standalone
+        // wallet word was valid. This matches the old baked behaviour.
         coinData[2] = *coinDat;
         coinData[3] = 0;
         coinData[1] = coinData[2];
+
+        // Loader already knows this persisted tracking baseline is untrustworthy.
+        // The current gamecoin.dat value is therefore the new tracked baseline, so
+        // any apparent pre-attach decrease must be ignored completely. Keep a
+        // transient marker until Rosalina attaches; the Home Menu hook uses it to
+        // force historical spend to zero before touching coinsRec or coinsEverSpent,
+        // and takes its separate invalid-baseline wallet-preservation path. 0x8000
+        // cannot be a legitimate coinsSpent value (tracked coins cap at 30000), and
+        // this halfword is not copied across.
+        coinChange[1] = 0x8000u;
     }
     coinData[0] = coins;
 

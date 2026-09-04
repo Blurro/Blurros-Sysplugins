@@ -22,7 +22,6 @@ g_coinChange:
     .hword 0
     .hword 0 @ coinsSpent, for coin setter page
     .hword 0 @ coinEarn pre-calc coins
-    .hword 0
 
 .balign 4
 .global PLUGIN_coin_stepDiagnostics

@@ -24,14 +24,19 @@ extern void *pluginTable_coin[];
 #define COIN_HOST__FSFILE_Close             ((Result(*)(Handle))pluginTable_coin[4])
 #define COIN_HOST__fsMakePath               ((FS_Path(*)(FS_PathType,const void*))pluginTable_coin[5])
 
-#define COIN_NEWSLIST_TITLE_ID 0x000400300000A002ULL
+#define COIN_NEWSLIST_TITLE_ID_JPN 0x0004003000008E02ULL
+#define COIN_NEWSLIST_TITLE_ID_USA 0x0004003000009702ULL
+#define COIN_NEWSLIST_TITLE_ID_EUR 0x000400300000A002ULL
+#define COIN_NEWSLIST_TITLE_ID_CHN 0x000400300000A802ULL
+#define COIN_NEWSLIST_TITLE_ID_KOR 0x000400300000B002ULL
+#define COIN_NEWSLIST_TITLE_ID_TWN 0x000400300000B802ULL
 #define COIN_NEWSLIST_ICON_PACK_SIZE 0x4800u
 #define COIN_ASSET_VERSION_MAGIC 0x56584E33u
 #define COIN_NEWSLIST_ICON_ALLOC_SIZE 0x5000u
 #define COIN_NEWSLIST_ICON_PAGES 5u
 
 extern void PLUGIN_coin_ClearTransientHomePointer(void);
-extern bool PLUGIN_coin_InitializeHomeMenuState(u16 *coinDat, u32 *coinData, u32 homePointer);
+extern bool PLUGIN_coin_InitializeHomeMenuState(u16 *coinDat, u32 *coinData, u16 *coinChange, u32 homePointer);
 extern void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize);
 
 extern u16 PLUGIN_coin_dat;
@@ -92,7 +97,7 @@ __asm__(
     ".global PLUGIN_coin_HomeNewsIconHook\n"
     ".type PLUGIN_coin_HomeNewsIconHook, %function\n"
     "PLUGIN_coin_HomeNewsIconHook:\n"
-    /* Home Menu's modern notification-icon resolver has the same icon ABI as newslist. */
+    // Home Menu's modern notification-icon resolver has the same icon ABI as newslist.
     "push {r0, r2}\n"
     "ldr r12, [r1]\n"
     "adr lr, PLUGIN_coin_homeNewsCoinLowWord\n"
@@ -109,7 +114,7 @@ __asm__(
     "mov r0, #0x1200\n"
     "cmp r2, r0\n"
     "blo 2f\n"
-    /* All Coin PIDs use one baked Home Menu icon. Newslist keeps its four variants. */
+    // All Coin PIDs use one baked Home Menu icon. Newslist keeps its four variants.
     "adr r1, PLUGIN_coin_homeNewsIcon\n"
     "mov r2, #0x1200\n"
     "mov lr, r2\n"
@@ -124,13 +129,13 @@ __asm__(
     "add sp, sp, #8\n"
     "b 3f\n"
     "2:\n"
-    /* Every non-Coin path remains Nintendo's original resolver. */
+    // Every non-Coin path remains Nintendo's original resolver.
     "pop {r0, r2}\n"
     "adr r12, PLUGIN_coin_homeNewsIconOriginalWord\n"
     "ldr r12, [r12]\n"
     "blx r12\n"
     "3:\n"
-    /* The literal jump replaces the original BL plus its following MOV r0,#0x40. */
+    // The literal jump replaces the original BL plus its following MOV r0,#0x40.
     "mov r0, #0x40\n"
     "adr r12, PLUGIN_coin_homeNewsIconResumeWord\n"
     "ldr pc, [r12]\n"
@@ -138,7 +143,7 @@ __asm__(
     ".balign 4\n"
     ".global PLUGIN_coin_homeNewsIcon\n"
     "PLUGIN_coin_homeNewsIcon:\n"
-    /* Bake the general 48x48 Coin icon directly into Loader Coin. */
+    // Bake the general 48x48 Coin icon directly into Loader Coin.
     ".include \"../../../coin_home_icon.inc\"\n"
     ".global PLUGIN_coin_homeNewsIconEnd\n"
     "PLUGIN_coin_homeNewsIconEnd:\n"
@@ -170,20 +175,20 @@ __asm__(
     ".global PLUGIN_coin_CreateCodeSetHook\n"
     ".type PLUGIN_coin_CreateCodeSetHook, %function\n"
     "PLUGIN_coin_CreateCodeSetHook:\n"
-    /* r0=&codeset, r1=&CodeSetHeader, r2=text LMA, r3=ro LMA, [sp]=data LMA. */
+    // r0=&codeset, r1=&CodeSetHeader, r2=text LMA, r3=ro LMA, [sp]=data LMA.
     "push {r0-r3, lr}\n"
     "mov r0, r1\n"
     "mov r1, r2\n"
     "bl PLUGIN_coin_PreCreateCodeSet\n"
     "pop {r0-r3, lr}\n"
-    /* Exact libctru svcCreateCodeSet wrapper, inlined so the absolute host jump needs no LR. */
+    // Exact libctru svcCreateCodeSet wrapper, inlined so the absolute host jump needs no LR.
     "push {r0}\n"
     "ldr r0, [sp, #4]\n"
     "svc 0x73\n"
     "ldr r2, [sp]\n"
     "str r1, [r2]\n"
     "add sp, sp, #4\n"
-    /* The overwritten host instruction is cmp r0,#0; preserve its flags into the following bge. */
+    // The overwritten host instruction is cmp r0,#0; preserve its flags into the following bge.
     "cmp r0, #0\n"
     "ldr r12, =g_coinCreateCodeSetReturn\n"
     "ldr pc, [r12]\n"
@@ -191,23 +196,23 @@ __asm__(
     ".global PLUGIN_coin_CreateProcessHook\n"
     ".type PLUGIN_coin_CreateProcessHook, %function\n"
     "PLUGIN_coin_CreateProcessHook:\n"
-    /* Exact libctru svcCreateProcess wrapper. */
+    // Exact libctru svcCreateProcess wrapper.
     "push {r0}\n"
     "svc 0x75\n"
     "ldr r2, [sp]\n"
     "str r1, [r2]\n"
     "add sp, sp, #4\n"
-    /* r0=result and r2 still points to the caller's output Handle. Preserve host-visible registers. */
+    // r0=result and r2 still points to the caller's output Handle. Preserve host-visible registers.
     "push {r0-r3, lr}\n"
     "mov r1, r2\n"
     "bl PLUGIN_coin_PostCreateProcess\n"
     "pop {r0-r3, lr}\n"
-    /* The overwritten host instruction is mov r5,r0. */
+    // The overwritten host instruction is mov r5,r0.
     "mov r5, r0\n"
     "ldr r12, =g_coinCreateProcessReturn\n"
     "ldr pc, [r12]\n"
 
-    /* Runs via the K11 PA alias inside newslist. Never dereference Loader virtual data here. */
+    // Runs via the K11 PA alias inside newslist. Never dereference Loader virtual data here.
     ".global PLUGIN_coin_newslistIconBaseWord\n"
     "PLUGIN_coin_newslistIconBaseWord:\n"
     ".word 0\n"
@@ -221,18 +226,16 @@ __asm__(
     ".global PLUGIN_coin_NewslistIconHook\n"
     ".type PLUGIN_coin_NewslistIconHook, %function\n"
     "PLUGIN_coin_NewslistIconHook:\n"
-    /* Original resolver args: r0=context, r1=&processID, r2=unk, r3=dst, [sp]=max, [sp+4]=outSize. */
-    /*
-     * Always run Nintendo's resolver first.  Older code skipped it for Coin PIDs, which
-     * assumes the resolver is a pure bitmap copier.  Preserve the complete original ABI
-     * and its side effects, then replace only the returned bitmap for our synthetic PIDs.
-     */
+    // Original resolver args: r0=context, r1=&processID, r2=unk, r3=dst, [sp]=max, [sp+4]=outSize.
+    // Always run Nintendo's resolver first.  Older code skipped it for Coin PIDs, which
+    // assumes the resolver is a pure bitmap copier.  Preserve the complete original ABI
+    // and its side effects, then replace only the returned bitmap for our synthetic PIDs.
     "push {r4-r9}\n"
-    "ldr r6, [sp, #24]\n"      /* original max */
-    "ldr r7, [sp, #28]\n"      /* original outSize */
-    "mov r4, r1\n"             /* processID pointer */
-    "mov r5, r3\n"             /* destination */
-    /* Recreate the two original stack arguments at the current SP for the resolver call. */
+    "ldr r6, [sp, #24]\n"      // original max
+    "ldr r7, [sp, #28]\n"      // original outSize
+    "mov r4, r1\n"             // processID pointer
+    "mov r5, r3\n"             // destination
+    // Recreate the two original stack arguments at the current SP for the resolver call.
     "sub sp, sp, #8\n"
     "str r6, [sp]\n"
     "str r7, [sp, #4]\n"
@@ -240,9 +243,9 @@ __asm__(
     "ldr r12, [r12]\n"
     "blx r12\n"
     "add sp, sp, #8\n"
-    /* Keep the resolver's condition flags exactly as the original BL+MOV sequence did. */
+    // Keep the resolver's condition flags exactly as the original BL+MOV sequence did.
     "mrs r9, cpsr\n"
-    /* Only the post-resolver bitmap replacement below is Coin-specific. */
+    // Only the post-resolver bitmap replacement below is Coin-specific.
     "ldr r12, [r4]\n"
     "ldr lr, =0x6E696F63\n"
     "cmp r12, lr\n"
@@ -259,7 +262,7 @@ __asm__(
     "mov r8, #0x1200\n"
     "cmp r6, r8\n"
     "blo 2f\n"
-    /* source = target-owned iconBase + difficulty slot * 0x1200 */
+    // source = target-owned iconBase + difficulty slot * 0x1200
     "add r1, lr, r12, lsl #12\n"
     "add r1, r1, r12, lsl #9\n"
     "mov r2, r8\n"
@@ -274,7 +277,7 @@ __asm__(
     "2:\n"
     "msr cpsr_f, r9\n"
     "pop {r4-r9}\n"
-    /* We replaced newslist's following MOV r0,#0x40 as the literal slot. */
+    // We replaced newslist's following MOV r0,#0x40 as the literal slot.
     "mov r0, #0x40\n"
     "adr r12, PLUGIN_coin_newslistIconResumeWord\n"
     "ldr pc, [r12]\n"
@@ -687,7 +690,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     u32 stateDelta = stateMapped - (u32)&PLUGIN_coin_dat;
     u16 *mappedDat = (u16*)((u32)&PLUGIN_coin_dat + stateDelta);
     u32 *mappedBin = (u32*)((u32)PLUGIN_coin_bin + stateDelta);
-    if (!PLUGIN_coin_InitializeHomeMenuState(mappedDat, mappedBin, homePointer))
+    u16 *mappedChange = (u16*)((u32)PLUGIN_coin_change + stateDelta);
+    if (!PLUGIN_coin_InitializeHomeMenuState(mappedDat, mappedBin, mappedChange, homePointer))
     {
         PLUGIN_coin_UnmapOwnPage(stateMapBase);
         PLUGIN_coin_ClearTransientHomePointer();
@@ -758,11 +762,9 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_MatchNewslistIconCall(
     u32 *originalTarget
 )
 {
-    /*
-     * This signature is shared by the dumped USA 7.0 and current EUR newslist.
-     * Match the complete caller setup around the resolver, not just the BL itself.
-     * That makes an accidental lookalike fail closed on unknown newslist builds.
-     */
+    // This signature is shared by the dumped USA 7.0 and current EUR newslist.
+    // Match the complete caller setup around the resolver, not just the BL itself.
+    // That makes an accidental lookalike fail closed on unknown newslist builds.
     if (!code || !originalTarget || index < 11u || index + 12u >= wordCount)
         return false;
 
@@ -805,7 +807,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_MatchNewslistIconCall(
         return false;
     }
 
-    /* First 0x60 bytes are identical in the supplied USA 7.0 and current EUR resolver. */
+    // First 0x60 bytes are identical in the supplied USA 7.0 and current EUR resolver.
     volatile const u32 *resolver = code + (target - textAddress) / sizeof(u32);
     for (u32 i = 0; i < sizeof(g_coinNewslistResolverPrefix) / sizeof(g_coinNewslistResolverPrefix[0]); i++)
     {
@@ -875,7 +877,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_SetNewslistHookWords(
     u32 resumeAddress
 )
 {
-    /* iconBase may deliberately be zero until PostCreateProcess finishes loading assets. */
+    // iconBase may deliberately be zero until PostCreateProcess finishes loading assets.
     return originalTarget && resumeAddress &&
         PLUGIN_coin_WriteOwnCodeWord(
             (u32)&PLUGIN_coin_newslistIconBaseWord,
@@ -891,16 +893,29 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_SetNewslistHookWords(
         );
 }
 
+PLUGIN_CODE(coin) static bool PLUGIN_coin_IsNewslistTitleId(u64 programId)
+{
+    // NEWS applet uses a different Title ID in each region, while the supported
+    // resolver/caller signatures are shared across the supplied builds. Keep the
+    // Title ID gate exact so unrelated system applets never reach the code scanner.
+    return programId == COIN_NEWSLIST_TITLE_ID_JPN ||
+           programId == COIN_NEWSLIST_TITLE_ID_USA ||
+           programId == COIN_NEWSLIST_TITLE_ID_EUR ||
+           programId == COIN_NEWSLIST_TITLE_ID_CHN ||
+           programId == COIN_NEWSLIST_TITLE_ID_KOR ||
+           programId == COIN_NEWSLIST_TITLE_ID_TWN;
+}
+
 PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
     CodeSetHeader *header,
     volatile u32 *text
 )
 {
-    /* Every CodeSet attempt clears only the pending handoff, never a live newslist hook. */
+    // Every CodeSet attempt clears only the pending handoff, never a live newslist hook.
     g_coinNewslistPending = false;
     g_coinNewslistIconBase = 0;
 
-    if (!header || header->program_id != COIN_NEWSLIST_TITLE_ID)
+    if (!header || !PLUGIN_coin_IsNewslistTitleId(header->program_id))
         return;
 
     u32 hookAddress = 0;
@@ -935,12 +950,10 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
     if (!iconBase || iconBase > 0xFFFFFFFFu - COIN_NEWSLIST_ICON_ALLOC_SIZE)
         return;
 
-    /*
-     * Patch the still-writable CodeSet source buffer before svcCreateCodeSet.
-     * The previous implementation mapped the created RX text page back into Loader and
-     * wrote through that mapping. On current kernels that mapping remains read-only and
-     * faults at scratch+pageOffset (e.g. 0x10000360 for current EUR newslist).
-     */
+    // Patch the still-writable CodeSet source buffer before svcCreateCodeSet.
+    // The previous implementation mapped the created RX text page back into Loader and
+    // wrote through that mapping. On current kernels that mapping remains read-only and
+    // faults at scratch+pageOffset (e.g. 0x10000360 for current EUR newslist).
     u32 hookIndex = (hookAddress - header->text_addr) / sizeof(u32);
     volatile u32 *site = text + hookIndex;
     u32 decodedTarget = 0;
@@ -951,11 +964,9 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
         return;
     }
 
-    /*
-     * Install safe fallback words now. Until icons are loaded, iconBase=0 makes the hook
-     * run Nintendo's resolver unchanged. PostCreateProcess only publishes iconBase after
-     * the target-owned RW pages have been populated successfully.
-     */
+    // Install safe fallback words now. Until icons are loaded, iconBase=0 makes the hook
+    // run Nintendo's resolver unchanged. PostCreateProcess only publishes iconBase after
+    // the target-owned RW pages have been populated successfully.
     if (!PLUGIN_coin_SetNewslistHookWords(
             0,
             originalTarget,
@@ -968,7 +979,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
     site[1] = PLUGIN_coin_Phys(PLUGIN_coin_NewslistIconHook);
     PLUGIN_coin_svcFlushEntireDataCache();
 
-    /* The extra pages become ordinary private RW/BSS pages owned by newslist itself. */
+    // The extra pages become ordinary private RW/BSS pages owned by newslist itself.
     header->rw_size_total += COIN_NEWSLIST_ICON_PAGES;
     g_coinNewslistIconBase = iconBase;
     g_coinNewslistPending = true;
@@ -1051,12 +1062,10 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PostCreateProcess(Result createResult, Handle
 
     Handle process = *outProcessHandle;
 
-    /*
-     * The CodeSet text was already patched while its source buffer was writable.
-     * The process is created but not started, so populate the added RW pages now and only
-     * then publish iconBase. If loading fails, the zero iconBase installed in PreCreate
-     * keeps the hook as a transparent Nintendo-resolver pass-through.
-     */
+    // The CodeSet text was already patched while its source buffer was writable.
+    // The process is created but not started, so populate the added RW pages now and only
+    // then publish iconBase. If loading fails, the zero iconBase installed in PreCreate
+    // keeps the hook as a transparent Nintendo-resolver pass-through.
     if (PLUGIN_coin_LoadNewslistIcons(process, iconBase))
     {
         (void)PLUGIN_coin_WriteOwnCodeWord(
@@ -1125,11 +1134,9 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_InstallAllLoaderHooks(void)
     u32 processAddress = 0;
     bool ok = false;
 
-    /*
-     * The semantic markers name the complete C expressions. GCC/DWARF can anchor
-     * those expressions before the actual BL, so scan forward from each marker
-     * for the unique call-site shape instead of pretending the marker is the BL.
-     */
+    // The semantic markers name the complete C expressions. GCC/DWARF can anchor
+    // those expressions before the actual BL, so scan forward from each marker
+    // for the unique call-site shape instead of pretending the marker is the BL.
     if (!PLUGIN_coin_MapOwnPage((u32)&PLUGIN_coin_loaderReturn, &returnMapBase, &returnMapped))
         goto done;
     if (!PLUGIN_coin_MapOwnPage(COIN_HOST__loaderHomePatch, &homeMapBase, &homeAddress))

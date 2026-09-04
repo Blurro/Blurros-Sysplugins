@@ -80,9 +80,9 @@ LOADER_PLUGIN_CONFIG=(
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
     "blurPLGbase|version101.bin"
-    "coinrosalina|version101.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "coinrosalina|version103.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "PowerPrevent|version100.bin"
-    "coinloader|version101.bin"
+    "coinloader|version103.bin"
 )
 
 # Tip: 3nx file data can be stacked, to make one .3nx file hold multiple plugins. Place generated .3nx files at SD:/luma/plugins/
@@ -191,6 +191,52 @@ STATE_DIR=".plgbuild"
 mkdir -p "$STATE_DIR"
 
 ROOT_DIR="$(pwd -P)"
+
+# If this header has not been generated yet, create it before building plugins.
+# Header generation may create temporary K11 build files; remove files created
+# by this invocation afterward and keep the generated header for later builds.
+ensure_sysplugin_entry_header() {
+    local entry_header="${ROOT_DIR}/sysplugin/include/SysPluginLoaderEntryGenerated.h"
+    local build_pair_tool="${ROOT_DIR}/sysplugin/build_pair.py"
+    local k11_build_dir="${ROOT_DIR}/k11_extension/build"
+    local k11_elf="${ROOT_DIR}/k11_extension/k11_extension.elf"
+    local k11_build_existed=0
+    local k11_elf_existed=0
+
+    [[ -f "$entry_header" ]] && return 0
+    if [[ ! -f "$build_pair_tool" ]]; then
+        printf 'ERROR: missing sysplugin/build_pair.py: %s\n' "$build_pair_tool" >&2
+        return 1
+    fi
+
+    [[ -e "$k11_build_dir" ]] && k11_build_existed=1
+    [[ -e "$k11_elf" ]] && k11_elf_existed=1
+
+    printf 'Generating SysPluginLoaderEntryGenerated.h for first plugin build...\n'
+    if ! python3 - "$ROOT_DIR" <<'PY_ENTRY_HEADER'
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root / "sysplugin"))
+import build_pair
+build_pair.bootstrap_entry_header()
+PY_ENTRY_HEADER
+    then
+        [[ "$k11_build_existed" -eq 1 ]] || rm -rf -- "$k11_build_dir"
+        [[ "$k11_elf_existed" -eq 1 ]] || rm -f -- "$k11_elf"
+        return 1
+    fi
+
+    [[ "$k11_build_existed" -eq 1 ]] || rm -rf -- "$k11_build_dir"
+    [[ "$k11_elf_existed" -eq 1 ]] || rm -f -- "$k11_elf"
+
+    if [[ ! -f "$entry_header" ]]; then
+        printf 'ERROR: failed to generate %s\n' "$entry_header" >&2
+        return 1
+    fi
+}
+
+ensure_sysplugin_entry_header
 
 declare -A MODULE_CONFIG_FP=()
 declare -A MODULE_MARKER_FP=()

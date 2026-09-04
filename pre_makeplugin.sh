@@ -12,6 +12,48 @@ MEDIUMTOP_VERSION=1
 HARDTOP_VERSION=1
 EXTREMTOP_VERSION=1
 
+ACHV_BUILDER="$SCRIPT_DIR/Playcoinz-achv-bin-builder.py"
+TOP_IMAGE_BUILDER="$SCRIPT_DIR/Playcoinz-top-image-pack-builder.py"
+ACHV_IMAGE_DIR="$SCRIPT_DIR/achvimages"
+
+inputs=(
+    "$SCRIPT_DIR/icn.bin"
+    "$ACHV_BUILDER"
+    "$TOP_IMAGE_BUILDER"
+    "$ACHV_IMAGE_DIR/easy1.jpg"
+    "$ACHV_IMAGE_DIR/easy2.jpg"
+    "$ACHV_IMAGE_DIR/easy3.jpg"
+    "$ACHV_IMAGE_DIR/easy4.jpg"
+    "$ACHV_IMAGE_DIR/easy5.jpg"
+    "$ACHV_IMAGE_DIR/medium1.jpg"
+    "$ACHV_IMAGE_DIR/medium2.jpg"
+    "$ACHV_IMAGE_DIR/medium3.jpg"
+    "$ACHV_IMAGE_DIR/medium4.jpg"
+    "$ACHV_IMAGE_DIR/medium5.jpg"
+    "$ACHV_IMAGE_DIR/hard1.jpg"
+    "$ACHV_IMAGE_DIR/hard2.jpg"
+    "$ACHV_IMAGE_DIR/hard3.jpg"
+    "$ACHV_IMAGE_DIR/hard4.jpg"
+    "$ACHV_IMAGE_DIR/hard5.jpg"
+    "$ACHV_IMAGE_DIR/extreme1.jpg"
+    "$ACHV_IMAGE_DIR/extreme2.jpg"
+    "$ACHV_IMAGE_DIR/extreme3.jpg"
+)
+for path in "${inputs[@]}"; do
+    if [[ ! -e "$path" ]]; then
+        printf 'ERROR: required pre-build input is missing: %s\n' "$path" >&2
+        exit 1
+    fi
+done
+
+printf 'Generating achv.bin...\n'
+python3 "$ACHV_BUILDER" --output "$SCRIPT_DIR/achv.bin"
+
+printf '\nValidating 4:4:4 achievement JPEGs and building top-image packs...\n'
+python3 "$TOP_IMAGE_BUILDER" \
+    --input-dir "$ACHV_IMAGE_DIR" \
+    --output-dir "$SCRIPT_DIR"
+
 required=(
     "$SCRIPT_DIR/icn.bin"
     "$SCRIPT_DIR/achv.bin"
@@ -179,7 +221,7 @@ def decompress_lz10(blob):
 
 
 # Normal plugin metadata versions consumed directly by makeplugin.sh.
-for version in (100, 101, 102):
+for version in (100, 101, 102, 103):
     Path(f"version{version}.bin").write_bytes(MAGIC + struct.pack("<I", version))
 
 compressed_items = [

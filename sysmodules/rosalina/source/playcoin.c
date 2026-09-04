@@ -433,6 +433,7 @@ extern u16 g_coinChange[3];
 extern volatile CoinStepDiagnostics PLUGIN_coin_stepDiagnostics;
 PLUGIN_DATA(coin) u32 g_coinOffset = 0;
 PLUGIN_DATA(coin) static u32 g_lastCoins = 0;
+PLUGIN_DATA(coin) static u32 g_lastRecommended = 0;
 PLUGIN_DATA(coin) static u32 g_lastEverSpent = 0;
 PLUGIN_DATA(coin) static u32 g_coinKey = 0x45454545u;
 PLUGIN_DATA(coin) static bool g_coinsFailed = false;
@@ -1208,6 +1209,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
 
     coinsEarned = 0;
     g_lastCoins = savedWallet;
+    g_lastRecommended = savedRecommended;
     g_lastEverSpent = savedLifetimeSpent;
     g_coinExtendedDirty = false;
     g_coinBalanceEvent = false;
@@ -1233,6 +1235,12 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_SetupCoins(void)
 {
+    // Loader runs before Rosalina and seeds its live Coin state from the
+    // vanilla /gamecoin.dat value whenever no valid extended coins.bin exists.
+    // Remember that case explicitly so the first Rosalina save starts from the
+    // player's vanilla balance rather than trusting any incomplete file data.
+    bool initializeFromVanilla = false;
+
     FS_Archive sd;
     Handle file = 0;
     Result rc = COIN_HOST__FSUSER_OpenArchive(
@@ -1287,20 +1295,24 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SetupCoins(void)
 
         if (!baseValid)
         {
-            // The original 32-byte state is not recoverable. Wipe everything,
-            // then rebuild from Loader's safe in-memory fallback after attach.
+            // The original tracking state is not recoverable. Loader has already
+            // preserved any sane standalone wallet word and seeded live tracking
+            // from vanilla state. Rebuild the persistent tracking baseline only
+            // after Home Menu attachment succeeds.
+            //
+            // Do NOT truncate here. The old file remains intact until
+            // PLUGIN_coin_WriteFullState() has successfully written the complete
+            // replacement; that function then sets the exact final size.
+            initializeFromVanilla = true;
             PLUGIN_coin_ResetExtendedData();
             g_coinAchievementSavePresent = false;
             g_coinAchievementSaveValid = false;
             g_coinAchievementSavedMask = 0;
-            if (R_SUCCEEDED(rc))
-                rc = COIN_HOST__FSFILE_SetSize(file, 0);
-            if (R_FAILED(rc))
-                g_coinsFailed = true;
         }
         else
         {
             g_lastCoins = base[0];
+            g_lastRecommended = base[7];
             g_coinOffset = base[1];
             g_coinKey = base[4];
 
@@ -1360,6 +1372,16 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SetupCoins(void)
 
     if (g_coinsFailed)
         return;
+
+    if (initializeFromVanilla)
+    {
+        // Loader validated coins.bin first and already seeded coinsTrue/coinsRec
+        // from the raw gamecoin.dat value that existed before Home Menu's extended
+        // wallet compensation. Keep that baseline exactly as supplied. Re-deriving
+        // it here from coinsBin/g_coinDat would make a sane cheated wallet alter the
+        // recovered tracked balance. Pending coinsEarned is added normally below.
+        coinsEverSpent = 0;
+    }
 
     PLUGIN_coin_ClampTrackedAccounting();
     g_lastEverSpent = coinsEverSpent;
@@ -1557,7 +1579,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_HasU16Terminator(const u16 *text, u32 
 
 PLUGIN_CODE(coin) static const char *PLUGIN_coin_PackedAssetPath(u32 assetIndex)
 {
-    /* Keep this as branches rather than a compiler-generated host .rodata pointer table. */
+    // Keep this as branches rather than a compiler-generated host .rodata pointer table.
     if (assetIndex < COIN_ASSET_MEDIUMTOP)
     {
         if (assetIndex < COIN_ASSET_ACHV)
@@ -1861,11 +1883,9 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UnpackAssetMaskWithContext(
     return result;
 }
 
-/*
- * Deliberately kept as one recallable helper for future lazy recovery paths.
- * It opens the active Rosalina Coin entry, finds its packed metadata assets,
- * creates /luma/coinachv if needed, and unpacks exactly the requested files.
- */
+// Deliberately kept as one recallable helper for future lazy recovery paths.
+// It opens the active Rosalina Coin entry, finds its packed metadata assets,
+// creates /luma/coinachv if needed, and unpacks exactly the requested files.
 PLUGIN_CODE(coin) static Result PLUGIN_coin_UnpackAssetMask(u32 assetMask)
 {
     PluginMenuFileContext source;
@@ -2416,7 +2436,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_EndNewsLedWindow(void)
 
 PLUGIN_CODE(coin) static const char *PLUGIN_coin_AchievementImagePackPath(u32 difficulty)
 {
-    /* Avoid a compiler-generated pointer lookup table outside plugin rodata. */
+    // Avoid a compiler-generated pointer lookup table outside plugin rodata.
     if (difficulty < 2u)
         return difficulty == 0u ? g_coinEasyTopImagePath : g_coinMediumTopImagePath;
     if (difficulty < 4u)
@@ -2902,7 +2922,7 @@ done:
 
     if (file)
     {
-        u32 footer = 0x21444E45u; /* "END!" */
+        u32 footer = 0x21444E45u; // "END!"
         if (R_SUCCEEDED(rc))
             rc = PLUGIN_coin_NewsDumpWrite(file, &offset, &footer, sizeof(footer), FS_WRITE_FLUSH);
         COIN_HOST__FSFILE_Close(file);

@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$SCRIPT_DIR"
 
 if (( BASH_VERSINFO[0] < 4 )); then
-    printf 'ERROR: makepluginGIT.sh requires Bash 4 or newer.\n' >&2
+    printf 'ERROR: makeplugingit.sh requires Bash 4 or newer.\n' >&2
     exit 1
 fi
 
@@ -42,11 +42,10 @@ fi
 #       the public payload is then written as output_name.bin.
 #
 #   allowed_refs
-#       Plugin IDs this payload may reference, excluding itself. A provider does not need to be built in the same run:
-#       undefined cross-plugin symbols named PLUGIN_<4-char ID>_* are resolved at runtime when that ID is listed here.
-#       The consumer header/source must give each imported symbol its correct ELF type (function/object).
-#       This controls which cross-plugin repair targets are permitted in the standalone update payload.
-#       Dependency/reference ordering is determined later by the actually installed plugin filenames/stacks.
+#       Plugin IDs this payload may reference, excluding itself.
+#       This only controls which cross-plugin repair targets are permitted in the
+#       standalone update payload. Dependency/reference ordering is determined later
+#       by the actually installed plugin filenames/stacks, not by this GitHub builder.
 #       Example config:
 #           blur references only itself, so this can be empty:
 #               "blur|blur_r|"
@@ -72,9 +71,9 @@ LOADER_PLUGIN_CONFIG=(
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
     "blur_r|version101.bin"
-    "coin_r|version101.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "coin_r|version103.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "powr_r|version100.bin"
-    "coin_l|version101.bin"
+    "coin_l|version103.bin"
 )
 
 # GitHub update payloads must be standalone single-entry files.
@@ -114,7 +113,7 @@ STACKED_PLUGIN_CONFIG=(
 # Access host targets through the plugin table; do not use the host symbol directly at runtime.
 # This 'define' trick forces non-relative references, which is VERY IMPORTANT for plugin code to be relocatable
 #
-# Run ./makepluginGIT.sh when producing standalone GitHub update payloads. It automatically:
+# Run ./makeplugingit.sh when producing standalone GitHub update payloads. It automatically:
 # - runs a normal incremental make for plugin-code-only changes
 # - prepares marker placeholders, builds, then resolves semantic marker keys
 # - incrementally recompiles changed marked host sources while preserving unrelated .o files
@@ -130,7 +129,6 @@ STACKED_PLUGIN_CONFIG=(
 MAX_ALLOWED_REFS=31
 GITHUB_BUILD_PRIORITY=0
 
-
 LD_START_MARKER="/* pluginstart */"
 LD_END_MARKER="/* pluginend */"
 
@@ -142,7 +140,7 @@ total_metadata_count=${#METADATA_CONFIG[@]}
 total_stack_count=${#STACKED_PLUGIN_CONFIG[@]}
 
 if [[ "$total_stack_count" -ne 0 ]]; then
-    printf 'ERROR: makepluginGIT.sh only builds standalone GitHub payloads; STACKED_PLUGIN_CONFIG must stay empty.\n' >&2
+    printf 'ERROR: makeplugingit.sh only builds standalone GitHub payloads; STACKED_PLUGIN_CONFIG must stay empty.\n' >&2
     exit 1
 fi
 
@@ -174,6 +172,35 @@ trim() {
     printf "%s" "$s"
 }
 
+generate_configured_version_metadata() {
+    python3 - "${METADATA_CONFIG[@]}" <<'PY'
+import pathlib
+import re
+import struct
+import sys
+
+for entry in sys.argv[1:]:
+    fields = [field.strip() for field in entry.split("|")]
+    for name in fields[1:]:
+        match = re.fullmatch(r"version([0-9]+)\.bin", name)
+        if not match:
+            continue
+
+        version = int(match.group(1), 10)
+        if version > 0xFFFFFFFF:
+            raise SystemExit(f"ERROR: version metadata value is too large: {name}")
+
+        payload = b"3NXV" + struct.pack("<I", version)
+        path = pathlib.Path(name)
+        if not path.exists() or path.read_bytes() != payload:
+            path.write_bytes(payload)
+            print(f"Wrote {name} (3NXV, version {version})")
+PY
+}
+
+generate_configured_version_metadata
+
+
 STATE_DIR=".plgbuild-git"
 # Keep packaging/output state private to the Git builder, but share semantic
 # compile-state with the stock makeplugin.sh through its untouched .plgbuild
@@ -183,6 +210,55 @@ SEMANTIC_STATE_DIR=".plgbuild"
 mkdir -p "$STATE_DIR" "$SEMANTIC_STATE_DIR"
 
 ROOT_DIR="$(pwd -P)"
+
+# A pristine stock+devkit tree has not run sysplugin/build_pair.py yet, so the
+# generated K11 entry aliases included by Loader/Rosalina main.c do not exist.
+# Bootstrap that one header on demand.  If this invocation had to create the
+# heavy temporary K11 build/ELF solely for the bootstrap, remove those heavy
+# artifacts again; keep the tiny generated header for normal incremental builds.
+bootstrap_sysplugin_entry_header() {
+    local entry_header="${ROOT_DIR}/sysplugin/include/SysPluginLoaderEntryGenerated.h"
+    local bootstrap_tool="${ROOT_DIR}/sysplugin/build_pair.py"
+    local k11_build_dir="${ROOT_DIR}/k11_extension/build"
+    local k11_elf="${ROOT_DIR}/k11_extension/k11_extension.elf"
+    local k11_build_existed=0
+    local k11_elf_existed=0
+
+    [[ -f "$entry_header" ]] && return 0
+    if [[ ! -f "$bootstrap_tool" ]]; then
+        printf 'ERROR: pristine sysplugin bootstrap tool is missing: %s\n' "$bootstrap_tool" >&2
+        return 1
+    fi
+
+    [[ -e "$k11_build_dir" ]] && k11_build_existed=1
+    [[ -e "$k11_elf" ]] && k11_elf_existed=1
+
+    printf 'Bootstrapping SysPluginLoaderEntryGenerated.h for pristine plugin build...\n'
+    if ! python3 - "$ROOT_DIR" <<'PY_BOOTSTRAP'
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(root / "sysplugin"))
+import build_pair
+build_pair.bootstrap_entry_header()
+PY_BOOTSTRAP
+    then
+        [[ "$k11_build_existed" -eq 1 ]] || rm -rf -- "$k11_build_dir"
+        [[ "$k11_elf_existed" -eq 1 ]] || rm -f -- "$k11_elf"
+        return 1
+    fi
+
+    [[ "$k11_build_existed" -eq 1 ]] || rm -rf -- "$k11_build_dir"
+    [[ "$k11_elf_existed" -eq 1 ]] || rm -f -- "$k11_elf"
+
+    if [[ ! -f "$entry_header" ]]; then
+        printf 'ERROR: pristine sysplugin bootstrap did not produce %s\n' "$entry_header" >&2
+        return 1
+    fi
+}
+
+bootstrap_sysplugin_entry_header
+
 
 semantic_state_files() {
     local module_name="$1"
@@ -633,16 +709,6 @@ process_module_plugins() {
             if [[ "$ref" != "$pid" ]]; then
                 ref_count=$((ref_count + 1))
             fi
-
-            local found=false
-            local known
-
-            for known in "${plugin_ids[@]}"; do
-                if [[ "$known" == "$ref" ]]; then
-                    found=true
-                    break
-                fi
-            done
 
         done
 
