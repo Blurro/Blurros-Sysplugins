@@ -51,4 +51,10 @@ This was made as a mini proof-of-concept that the requirement of forking Luma3DS
 
 ---
 
+## IgnoreCfgNor
+
+A Sysplugin reimplementation of the `ignore-cfgnor` patch, originally from [lifehackerhansol/Luma3DS](https://github.com/lifehackerhansol/Luma3DS/tree/ignore-cfgnor), for systems that need `cfg:nor` requests ignored without requiring a separate Luma3DS fork.
+
+---
+
 More Sysplugins will probably end up here as I find more wacky things I want my 3DS to do.

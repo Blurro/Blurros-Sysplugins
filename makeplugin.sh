@@ -68,6 +68,7 @@ ROSALINA_PLUGIN_CONFIG=(
 )
 
 LOADER_PLUGIN_CONFIG=(
+    "CFGN|IgnoreCfgNor-v101|0|"
     "coin|coinloader|50|"
 )
 
@@ -80,9 +81,9 @@ LOADER_PLUGIN_CONFIG=(
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
     "blurPLGbase|version101.bin"
-    "coinrosalina|version103.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "coinrosalina|version104.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "PowerPrevent|version100.bin"
-    "coinloader|version103.bin"
+    "coinloader|version104.bin"
 )
 
 # Tip: 3nx file data can be stacked, to make one .3nx file hold multiple plugins. Place generated .3nx files at SD:/luma/plugins/

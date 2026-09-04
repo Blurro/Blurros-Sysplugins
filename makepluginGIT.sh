@@ -60,6 +60,7 @@ ROSALINA_PLUGIN_CONFIG=(
 )
 
 LOADER_PLUGIN_CONFIG=(
+    "CFGN|cfgn_l|"
     "coin|coin_l|"
 )
 
@@ -71,9 +72,9 @@ LOADER_PLUGIN_CONFIG=(
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
     "blur_r|version101.bin"
-    "coin_r|version103.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "coin_r|version104.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "powr_r|version100.bin"
-    "coin_l|version103.bin"
+    "coin_l|version104.bin"
 )
 
 # GitHub update payloads must be standalone single-entry files.

@@ -384,6 +384,8 @@ PLUGIN_RODATA(coin) static const u64 g_coinAchievementProcessIds[4] = {
     0x000400336E696F63ULL,
 };
 PLUGIN_RODATA(coin) static const u8 g_coinAchievementImageCounts[4] = {5u, 5u, 5u, 3u};
+PLUGIN_RODATA(coin) static const char g_coinAchievementCipherAlphabet[] =
+    "6PLAzyZ0rp4MiQvwnmYkHeF8s2VoSJB5KWbNOG73ltTDgfaUE9jqRCcX1xduhI";
 PLUGIN_RODATA(coin) static const u16 g_coinMonthStart[12] = {
     0u, 31u, 59u, 90u, 120u, 151u, 181u, 212u, 243u, 273u, 304u, 334u,
 };
@@ -1563,6 +1565,27 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawEditor(
 }
 
 
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_DecodeAchievementString(u16 *text, u32 capacity)
+{
+    if (!text)
+        return;
+
+    for (u32 i = 0; i < capacity && text[i]; i++)
+    {
+        u16 character = text[i];
+        for (u32 j = 0; j < 62u; j++)
+        {
+            if (character != (u16)(u8)g_coinAchievementCipherAlphabet[j])
+                continue;
+
+            u32 previous = j ? j - 1u : 61u;
+            text[i] = (u16)(u8)g_coinAchievementCipherAlphabet[previous];
+            break;
+        }
+    }
+}
+
 PLUGIN_CODE(coin) static bool PLUGIN_coin_HasU16Terminator(const u16 *text, u32 capacity)
 {
     if (!text || !capacity || !text[0])
@@ -2038,6 +2061,10 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_ReadAchievement(
         rc = (Result)-24;
         goto cleanup_file;
     }
+
+    PLUGIN_coin_DecodeAchievementString(achievement->title, 32u);
+    PLUGIN_coin_DecodeAchievementString(achievement->notificationMessage, 256u);
+    PLUGIN_coin_DecodeAchievementString(achievement->menuMessage, 256u);
 
     rc = 0;
 

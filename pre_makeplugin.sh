@@ -6,11 +6,11 @@ cd "$SCRIPT_DIR"
 
 # Independent installed-asset versions. Bump only the asset that changed.
 ICN_VERSION=1
-ACHV_VERSION=1
-EASYTOP_VERSION=1
-MEDIUMTOP_VERSION=1
-HARDTOP_VERSION=1
-EXTREMTOP_VERSION=1
+ACHV_VERSION=2
+EASYTOP_VERSION=2
+MEDIUMTOP_VERSION=2
+HARDTOP_VERSION=2
+EXTREMTOP_VERSION=2
 
 ACHV_BUILDER="$SCRIPT_DIR/Playcoinz-achv-bin-builder.py"
 TOP_IMAGE_BUILDER="$SCRIPT_DIR/Playcoinz-top-image-pack-builder.py"
@@ -18,7 +18,6 @@ ACHV_IMAGE_DIR="$SCRIPT_DIR/achvimages"
 
 inputs=(
     "$SCRIPT_DIR/icn.bin"
-    "$ACHV_BUILDER"
     "$TOP_IMAGE_BUILDER"
     "$ACHV_IMAGE_DIR/easy1.jpg"
     "$ACHV_IMAGE_DIR/easy2.jpg"
@@ -46,8 +45,16 @@ for path in "${inputs[@]}"; do
     fi
 done
 
-printf 'Generating achv.bin...\n'
-python3 "$ACHV_BUILDER" --output "$SCRIPT_DIR/achv.bin"
+if [[ -f "$ACHV_BUILDER" ]]; then
+    printf 'Generating achv.bin...\n'
+    python3 "$ACHV_BUILDER" --output "$SCRIPT_DIR/achv.bin"
+else
+    if [[ ! -f "$SCRIPT_DIR/achv.bin" ]]; then
+        printf 'ERROR: Playcoinz-achv-bin-builder.py is absent and achv.bin was not supplied.\n' >&2
+        exit 1
+    fi
+    printf 'Achievement builder not present; using supplied achv.bin.\n'
+fi
 
 printf '\nValidating 4:4:4 achievement JPEGs and building top-image packs...\n'
 python3 "$TOP_IMAGE_BUILDER" \
@@ -221,7 +228,7 @@ def decompress_lz10(blob):
 
 
 # Normal plugin metadata versions consumed directly by makeplugin.sh.
-for version in (100, 101, 102, 103):
+for version in (100, 101, 102, 103, 104):
     Path(f"version{version}.bin").write_bytes(MAGIC + struct.pack("<I", version))
 
 compressed_items = [
