@@ -22,7 +22,7 @@ Plugin IDs, priorities, components, metadata and stacking are configured in `mak
 
 A big expansion of the 3DS Play Coin system, making walking and earning coins become, well, even more game-ified than before.
 
-Nintendo normally caps you at 300 Play Coins, with every coin costing the same 100 steps. PlayCoinz raises the balance to **30,000**, while introducing a progressive system where coins gradually take more steps to earn.
+Nintendo normally caps you at 300 Play Coins, with every coin costing the same 100 steps. PlayCoinz raises the maximum to **30,000**, and introduces increasingly-difficult *secrets* to earn through earning, and spending, your Play Coins.
 
 It also keeps track of the coins you've genuinely earned through walking, allowing much more detailed statistics *while still letting you manually change your balance if you want!*
 
