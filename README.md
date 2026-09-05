@@ -20,7 +20,7 @@ Make sure to check for **updates** every once in a while.
 
 ## Building
 
-Build by overlaying Stock Nexus3DS -> 3NX Dev Kit -> This repository, then run:
+Build by overlaying [Stock Nexus3DS](https://github.com/2b-zipper/Nexus3DS/tree/dev) -> [3NX Dev Kit](https://github.com/Blurro/3NX-Plugin-DevKit) -> This repository, then run:
 
 ```
 ./pre_makeplugin.sh
