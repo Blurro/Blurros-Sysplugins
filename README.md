@@ -4,11 +4,32 @@ Source for my [Nexus3DS](https://github.com/2b-zipper/Nexus3DS/tree/dev) Sysplug
 
 These use Nexus3DS's `.3nx` system to add new features without needing them built directly into `boot.firm`.
 
-## Usage
+## Installing
 
-Build using the current Nexus3DS Sysplugin Dev Kit, then place the resulting `.3nx` files in:
+Go and grab the latest **[Sysplugin Menu release](https://github.com/Blurro/MENU-Sysplugin-3DS/releases)** and make sure to put `sysplgfetch.txt` configured with:
+```
+Blurro's Sysplugins
+https://blurro.github.io/sysplugins/online_v1/onlinetemporary.3on
+```
 
-```text
+Onto your SD card in the `/luma/plugins/` folder!
+
+Go to `Rosalina Menu -> Sysplugin Menu -> Open Online Menu -> Blurro's Sysplugins -> Check Sysplugins`,<br>and download what you need!
+
+Make sure to check for **updates** every once in a while.
+
+## Building
+
+Build by overlaying Stock Nexus3DS -> 3NX Dev Kit -> This repository, then run:
+
+```
+./pre_makeplugin.sh
+./makeplugin.sh
+```
+
+Then place the built `.3nx` files in:
+
+```
 /luma/plugins/
 ```
 
