@@ -265,6 +265,8 @@ PLUGIN_RODATA(coin) static const char g_coinMenuUnselected[] = " ";
 PLUGIN_RODATA(coin) static const char g_coinMenuClearRow[] =
     "                                                  ";
 PLUGIN_RODATA(coin) static const char g_coinBackShort[] = "B: go back";
+PLUGIN_RODATA(coin) static const char g_coinArtworkCredit[] =
+    "*secrets* artwork courtesy of @AnasAbdin";
 PLUGIN_RODATA(coin) static const char g_coinViewShort[] = "X: view";
 PLUGIN_RODATA(coin) static const char g_coinAchievementOptionsPrompt[] = "Press X for options";
 PLUGIN_RODATA(coin) static const char g_coinAchievementResendItem[] = "Resend if missing";
@@ -4156,6 +4158,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawPlayCoinzMenu(
     }
 
     COIN_HOST__Draw_DrawString(20, 120, COLOR_GRAY, g_coinBackShort);
+    COIN_HOST__Draw_DrawString(20, 220, COIN_FRAME_TITLE_COLOR, g_coinArtworkCredit);
     COIN_HOST__Draw_FlushFramebuffer();
     COIN_HOST__Draw_Unlock();
 }
