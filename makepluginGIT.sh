@@ -57,6 +57,7 @@ ROSALINA_PLUGIN_CONFIG=(
     "blur|blur_r|MENU"
     "coin|coin_r|blur,MENU"
     "powr|powr_r|MENU"
+    "helo|hello_r|MENU"
 )
 
 LOADER_PLUGIN_CONFIG=(
@@ -74,6 +75,7 @@ METADATA_CONFIG=(
     "blur_r|version101.bin"
     "coin_r|version104.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "powr_r|version100.bin"
+    "hello_r|version100.bin"
     "coin_l|version104.bin"
 )
 

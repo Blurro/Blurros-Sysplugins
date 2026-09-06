@@ -184,6 +184,7 @@ extern bool PLUGIN_blur_SetMenuTextHookEnabled(bool enabled);
 
 PLUGIN_CODE(blur) static void PLUGIN_blur_SaveMenuSettings(void)
 {
+    // tiny MENU-owned settings blob
     if (!BLUR_MENU__SaveData)
         return;
 

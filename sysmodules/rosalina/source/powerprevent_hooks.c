@@ -144,6 +144,7 @@ PLUGIN_CODE(powr) bool PLUGIN_powr_InstallHook(void)
     instr3 = *(volatile u32 *)(mappedAddress + 12u);
 
     resultRegister = (instr2 >> 12) & 0xFu;
+    // Nexus saves the key result first, stock Luma goes straight to menuCombo
     nexusShape =
         (instr2 & 0xFFFF0FFFu) == 0xE1A00000u &&
         resultRegister >= 4u && resultRegister <= 11u &&
@@ -163,6 +164,7 @@ PLUGIN_CODE(powr) bool PLUGIN_powr_InstallHook(void)
     powerprevent_menu_combo_addr = POWR_HOST__menuCombo;
     powerprevent_hook_return_addr = marker + 8u;
 
+    // replace the scan call with our literal jump
     *(volatile u32 *)(mappedAddress + 4u) = (u32)PLUGIN_powr_KeyScanHook;
     *(volatile u32 *)mappedAddress = 0xE51FF004u;
     PLUGIN_powr_UnmapPage(mappedBase);

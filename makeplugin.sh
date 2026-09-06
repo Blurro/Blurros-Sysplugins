@@ -65,6 +65,7 @@ ROSALINA_PLUGIN_CONFIG=(
     "blur|blurPLGbase|10|MENU"
     "coin|coinrosalina|50|blur,MENU"
     "powr|PowerPrevent|60|MENU"
+    "helo|HelloWorld|70|MENU"
 )
 
 LOADER_PLUGIN_CONFIG=(
@@ -83,6 +84,7 @@ METADATA_CONFIG=(
     "blurPLGbase|version101.bin"
     "coinrosalina|version104.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "PowerPrevent|version100.bin"
+    "HelloWorld|version100.bin"
     "coinloader|version104.bin"
 )
 

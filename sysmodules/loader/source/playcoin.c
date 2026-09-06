@@ -274,7 +274,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_ClearTransientHomePointer(void)
         return;
     }
 
-    // Only failure paths need to invalidate the previous Home Menu pointer.
+    // clear the old Home Menu pointer only on failed setup
     if (R_SUCCEEDED(COIN_HOST__FSUSER_OpenFile(
         &file,
         sd,
@@ -298,7 +298,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     u32 homePointer
 )
 {
-    // fetch system coins & my coins
+    // grab vanilla coins before loading our extended state
     u16 systemCoins = 0;
     if (R_FAILED(PLUGIN_coin_GetPlayCoins(&systemCoins)))
         return false;
@@ -326,7 +326,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
         return false;
     }
 
-    // Read the complete original 32-byte state in one IPC instead of three.
+    // old 32-byte base state
     u32 base[8];
     volatile u32 *baseWords = base;
     for (u32 i = 0; i < 8u; i++)
@@ -338,9 +338,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     u64 fileSize = 0;
     bool sizeValid = R_SUCCEEDED(COIN_HOST__FSFILE_GetSize(file, &fileSize));
 
-    // Keep the wallet word independent from the encrypted tracking state, as
-    // the original coinscomplete implementation did. A damaged tracking block
-    // must not erase an otherwise sane extended wallet.
+    // wallet is standalone, bad tracking data shouldnt wipe it
     bool walletValid = baseReadSucceeded && read >= sizeof(u32) && base[0] <= 30000u;
     u32 coins;
     if (walletValid)
@@ -349,7 +347,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     }
     else
     {
-        // Missing/invalid wallet: rebuild only the wallet from vanilla state.
+        // bad wallet falls back to vanilla only
         coins = *coinDat;
         rc = PLUGIN_coin_FSFILE_Write(file, &written, 0, &coins, sizeof(coins), 0);
         if (R_FAILED(rc) || written != sizeof(coins))
@@ -360,8 +358,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
         }
     }
 
-    // Publish the new pointer directly. Closing this handle completes the write
-    // before Home Menu is released, so a forced media flush is unnecessary here.
+    // hand Home Menu its live pointer before releasing the file
     rc = PLUGIN_coin_FSFILE_Write(
         file,
         &written,
@@ -377,9 +374,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
         return false;
     }
 
-    // A valid extension contributes only its lifetime net withdrawn Blackjack
-    // surplus. Any missing or malformed suffix is treated as an empty suffix;
-    // Rosalina performs the corresponding on-disk recovery before saving.
+    // bad/missing extension just means no Blackjack surplus yet
     u32 lifetimeEarned = 0;
     u32 lifetimeSpent = 0;
     bool baseValid = sizeValid && fileSize >= COIN_FILE_BASE_SIZE &&
@@ -390,8 +385,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
 
     if (baseValid)
     {
-        // Clear any stale pre-attach invalid-baseline marker. The marker lives
-        // only in Loader's coinsSpent halfword and is never copied to Rosalina.
+        // wipe Loader's one-shot invalid-base marker
         coinChange[1] = 0;
 
         u32 blackjackSurplus = PLUGIN_coin_ReadBlackjackSurplus(
@@ -414,21 +408,13 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     }
     else
     {
-        // Tracking/provenance is not recoverable. Reset that accounting to the
-        // vanilla baseline, but deliberately keep `coins` if its standalone
-        // wallet word was valid. This matches the old baked behaviour.
+        // bad tracking state resets to vanilla, but keep a sane wallet
         coinData[2] = *coinDat;
         coinData[3] = 0;
         coinData[1] = coinData[2];
 
-        // Loader already knows this persisted tracking baseline is untrustworthy.
-        // The current gamecoin.dat value is therefore the new tracked baseline, so
-        // any apparent pre-attach decrease must be ignored completely. Keep a
-        // transient marker until Rosalina attaches; the Home Menu hook uses it to
-        // force historical spend to zero before touching coinsRec or coinsEverSpent,
-        // and takes its separate invalid-baseline wallet-preservation path. 0x8000
-        // cannot be a legitimate coinsSpent value (tracked coins cap at 30000), and
-        // this halfword is not copied across.
+        // 0x8000 tells the first Home Menu pass to ignore fake historical spend
+        // it cant clash with a real spend since tracked coins cap at 30000
         coinChange[1] = 0x8000u;
     }
     coinData[0] = coins;
@@ -436,7 +422,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     COIN_HOST__FSFILE_Close(file);
     COIN_HOST__FSUSER_CloseArchive(sd);
 
-    // prep coinsDat to increase by the amount coinsBin would've decreased by
+    // rebase vanilla coins around the extended wallet
     if (coins < 300)
         coins = *coinDat;
     else

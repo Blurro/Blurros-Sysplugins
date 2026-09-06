@@ -13,7 +13,7 @@ PACKS = (
     ("extreme", 3, "extremtop.bin"),
 )
 
-# Start-of-frame markers that carry dimensions/component sampling data.
+# JPEG frame markers with size/sampling info.
 SOF_MARKERS = {
     0xC0, 0xC1, 0xC2, 0xC3,
     0xC5, 0xC6, 0xC7,
@@ -21,7 +21,7 @@ SOF_MARKERS = {
     0xCD, 0xCE, 0xCF,
 }
 
-# Markers with no length field.
+# JPEG markers with no length field.
 STANDALONE_MARKERS = {0x01, *range(0xD0, 0xD9)}
 
 
@@ -33,8 +33,7 @@ def jpeg_info(data: bytes, source: Path) -> tuple[int, int, list[tuple[int, int,
     pos = 2
     while pos < len(data):
         if data[pos] != 0xFF:
-            # Entropy-coded scan data is irrelevant here. All metadata we need must
-            # appear before SOS, so unexpected raw data before finding SOF is invalid.
+            # everything we need is before SOS, raw scan data here means the header is bad.
             raise RuntimeError(f"{source.name}: malformed JPEG marker stream")
 
         while pos < len(data) and data[pos] == 0xFF:
@@ -103,8 +102,7 @@ def validate_jpeg(source: Path) -> tuple[bytes, tuple[int, int]]:
             f"{source.name}: expected 3 JPEG colour components, got {len(components)}"
         )
 
-    # 4:4:4 means every component has 1x1 sampling. This is readable directly from
-    # the JPEG SOF header, so normal builds need no image-decoding library.
+    # 4:4:4 is visible in SOF, so normal builds dont need Pillow.
     bad = [(cid, h, v) for cid, h, v in components if (h, v) != (1, 1)]
     if bad:
         sampling_text = ", ".join(f"component {cid}={h}x{v}" for cid, h, v in components)
@@ -117,10 +115,7 @@ def validate_jpeg(source: Path) -> tuple[bytes, tuple[int, int]]:
 
 def build_pack(images: list[bytes]) -> bytes:
     count = len(images)
-    # Current 3NX format:
-    #   u32 imageCount
-    #   u32 imageSizes[imageCount]
-    #   u8  jpegData[]
+    # pack = count, per-image sizes, then JPEG bytes
     header = struct.pack("<I", count)
     header += struct.pack(f"<{count}I", *(len(image) for image in images))
     return header + b"".join(images)

@@ -55,6 +55,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_PatchMenuCallback(
         return (Result)-1;
     }
 
+    // copy Loader's temporary state into Rosalina-owned storage
     u16 *loaderDat = (u16*)loaderPointers[0];
     u32 *loaderData = (u32*)loaderPointers[1];
     u16 *loaderChange = (u16*)loaderPointers[2];
@@ -74,6 +75,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_PatchMenuCallback(
     PLUGIN_coin_stepDiagnostics.historyTotal = loaderDiagnostics[4];
     PLUGIN_coin_stepDiagnostics.coinsToday = loaderDiagnostics[5];
 
+    // point Home Menu at Rosalina now that the state is copied
     *(u32*)g_coinOffset = PLUGIN_coin_Phys(&g_coinDat);
     *(u32*)(g_coinOffset + 4) = PLUGIN_coin_Phys(g_coinData);
     *(u32*)(g_coinOffset + 8) = PLUGIN_coin_Phys(g_coinChange);

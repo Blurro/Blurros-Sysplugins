@@ -1,10 +1,6 @@
-/*
- * IgnoreCfgNor Nexus3DS Loader sysplugin v1.01
- * Reimplements the behavior of lifehackerhansol/Luma3DS ignore-cfgnor
- * commit ef25b3e4f23784dc192d5ae645963f34a54d3967 without modifying boot.firm.
- *
- * Nexus3DS/Luma3DS-derived work. GNU GPL v3 or later.
- */
+// IgnoreCfgNor loader plugin.
+// Same cfg:nor skip as lifehackerhansol/Luma3DS, without baking it into boot.firm.
+// Nexus3DS/Luma3DS-derived, GPLv3+.
 #include <3ds.h>
 
 #ifdef __INTELLISENSE__
@@ -31,17 +27,8 @@ extern void PLUGIN_CFGN_svcFlushEntireDataCache(void);
 extern void PLUGIN_CFGN_svcInvalidateEntireInstructionCache(void);
 extern Result PLUGIN_CFGN_svcGetSystemInfo(s64 *out, u32 type, s32 param);
 
-/*
- * This stub executes in K11 through Nexus's global physical alias.  At the
- * patched site SendSyncRequestHook has already proved r4 is a KClientSession;
- * r8 is the current thread TLS base and cmdbuf starts at r8+0x80.
- *
- * For cfg:nor we reproduce lifehackerhansol/Luma3DS ignore-cfgnor:
- *     skip = true;
- *     cmdbuf[1] = -1;
- * with res still zero.  For every other service we recreate the two original
- * instructions and resume the stock switch dispatcher.
- */
+// runs in K11 through Nexus's physical alias
+// cfg:nor gets the old skip=true / cmdbuf[1]=-1 reply, everything else falls back to stock
 __asm__(
     ".section .plugin_CFGN,\"ax\",%progbits\n"
     ".balign 4\n"
@@ -63,33 +50,30 @@ __asm__(
     ".type PLUGIN_CFGN_KernelHook, %function\n"
     "PLUGIN_CFGN_KernelHook:\n"
     "push {r0-r3, r12, lr}\n"
-    "ldr r0, [r4, #20]\n"                 /* clientSession->parentSession */
+    "ldr r0, [r4, #20]\n"                 // parentSession
     "adr r12, PLUGIN_CFGN_lookupVa\n"
     "ldr r12, [r12]\n"
-    "blx r12\n"                            /* SessionInfo_Lookup */
+    "blx r12\n"                            // SessionInfo_Lookup
     "cmp r0, #0\n"
     "beq 2f\n"
-    "ldr r1, [r0, #4]\n"                  /* info->name[0..3] */
-    "ldr r2, =0x3A676663\n"                /* \"cfg:\" little-endian */
+    "ldr r1, [r0, #4]\n"                  // service name low
+    "ldr r2, =0x3A676663\n"                // "cfg:"
     "cmp r1, r2\n"
     "bne 2f\n"
-    "ldr r1, [r0, #8]\n"                  /* info->name[4..7] */
-    "ldr r2, =0x00726F6E\n"                /* \"nor\\0\" little-endian */
+    "ldr r1, [r0, #8]\n"                  // service name high
+    "ldr r2, =0x00726F6E\n"                // "nor"
     "cmp r1, r2\n"
     "bne 2f\n"
 
-    /* Matched cfg:nor: synthesize the same failed IPC reply as the fork,
-       then enter the stock SendSyncRequestHook skip-cleanup tail.  r6 is the
-       compiler's skip boolean at that tail; [sp,#8] already contains res=0. */
+    // cfg:nor: fake the failed reply then use the stock skip cleanup
     "pop {r0-r3, r12, lr}\n"
     "mvn r0, #0\n"
-    "str r0, [r8, #0x84]\n"                /* cmdbuf[1] = -1 */
-    "mov r6, #1\n"                         /* skip = true */
+    "str r0, [r8, #0x84]\n"                // cmdbuf[1] = -1
+    "mov r6, #1\n"                         // skip = true
     "adr r12, PLUGIN_CFGN_cleanupVa\n"
     "ldr pc, [r12]\n"
 
-    /* Not cfg:nor: restore caller scratch regs, recreate the two overwritten
-       instructions, and resume at the original cmp r3,r2. */
+    // anything else: replay the two replaced instructions and carry on
     "2:\n"
     "pop {r0-r3, r12, lr}\n"
     "ldr r3, [r8, #0x80]\n"
@@ -199,7 +183,7 @@ PLUGIN_CODE(CFGN) static u32 PLUGIN_CFGN_FindSendSync(u32 k11BaseAlias, u32 topA
             continue;
 
         if (found)
-            return 0; /* ambiguous signature: refuse to patch */
+            return 0; // more than one match, dont touch it
         found = address;
     }
 
@@ -241,9 +225,7 @@ PLUGIN_CODE(CFGN) static u32 PLUGIN_CFGN_FindSkipCleanup(u32 sendSyncAlias, u32 
     volatile const u32 *w = (volatile const u32 *)sendSyncAlias;
     u32 foundAlias = 0;
 
-    /* Compiler-generated common tail for skip=true:
-       release clientSession; if (!skip) call SendSyncRequest(handle);
-       otherwise return res from [sp,#8]. */
+    // common skip=true cleanup tail
     for (u32 i = 0; i < 0x500u / 4u; i++)
     {
         if (w[i + 0] != 0xE5943000u ||
@@ -288,9 +270,7 @@ PLUGIN_CODE(CFGN) static bool PLUGIN_CFGN_Install(void)
     u32 systemTop = isN3DS ? CFGN_N3DS_SYSTEM_TOP : CFGN_O3DS_SYSTEM_TOP;
     u32 topAlias = CFGN_ALIAS_BIT | systemTop;
 
-    /* K11 is packed immediately below the model-specific system-memory top.
-       Find its page signature from there instead of embedding a build-specific
-       SysPluginLoader_Main address. */
+    // find K11 from its page signature instead of hardcoding one build
     u32 k11BaseAlias = PLUGIN_CFGN_FindK11Base(topAlias);
     if (!k11BaseAlias || k11BaseAlias >= topAlias)
         return false;
@@ -302,7 +282,7 @@ PLUGIN_CODE(CFGN) static bool PLUGIN_CFGN_Install(void)
     volatile u32 *sendSync = (volatile u32 *)sendSyncAlias;
     volatile u32 *patch = 0;
 
-    /* The first switch compare begins immediately after KClientSession validation. */
+    // first service switch compare after KClientSession validation
     for (u32 i = 32; i < 96; i++)
     {
         if (sendSync[i] == 0xE5983080u &&
@@ -322,7 +302,7 @@ PLUGIN_CODE(CFGN) static bool PLUGIN_CFGN_Install(void)
     if (switchR2 != 0x000C0080u)
         return false;
 
-    /* Decode SessionInfo_Lookup from one of the stock per-service lookup sites. */
+    // grab SessionInfo_Lookup from a normal service lookup call
     u32 lookupVa = 0;
     u32 sendSyncVa = PLUGIN_CFGN_NormalVa(k11BaseAlias, sendSyncAlias);
     for (u32 i = 0; i < 0x500u / 4u; i++)
@@ -369,11 +349,11 @@ PLUGIN_CODE(CFGN) static bool PLUGIN_CFGN_Install(void)
         return false;
     }
 
-    /* Slots must be globally visible before K11 can ever enter the new stub. */
+    // publish the stub data before K11 can branch into it
     PLUGIN_CFGN_svcFlushEntireDataCache();
 
-    /* Exact two-word absolute jump.  We validated both overwritten semantics above. */
-    patch[0] = 0xE51FF004u; /* ldr pc, [pc, #-4] */
+    // two-word absolute jump, both old words were checked above
+    patch[0] = 0xE51FF004u; // ldr pc, [pc, #-4]
     patch[1] = hookAlias;
 
     PLUGIN_CFGN_svcFlushEntireDataCache();

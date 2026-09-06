@@ -93,6 +93,7 @@ PLUGIN_CODE(powr) static bool PLUGIN_powr_SetPowerMasked(bool masked)
     if (R_FAILED(res))
         return false;
 
+    // bit 0 masks the normal POWER-button IRQ
     res = POWR_HOST__MCUHWC_ReadRegister(0x18, &irqMask, 1);
     if (R_SUCCEEDED(res))
     {
@@ -113,6 +114,7 @@ PLUGIN_CODE(powr) u32 PLUGIN_powr_ScanAndUpdate(void)
     u32 keys = ((u32 (*)(void))powerprevent_scan_held_addr)();
     bool startHeld = (keys & KEY_START) != 0;
 
+    // sync the MCU mask the first time the hook runs
     if (!powerprevent_ready)
     {
         if (!PLUGIN_powr_SetPowerMasked(g_powrActive && !startHeld))
@@ -149,6 +151,7 @@ PLUGIN_CODE(powr) static void PLUGIN_powr_SaveSettings(void)
     if (!POWR_MENU__SaveData)
         return;
 
+    // MENU owns the tiny persistent settings blob
     PowerPreventSettings settings;
     settings.version = POWR_SETTINGS_VERSION;
     settings.active = g_powrActive ? 1u : 0u;
@@ -162,6 +165,7 @@ PLUGIN_CODE(powr) static void PLUGIN_powr_LoadSettings(void)
     if (!POWR_MENU__LoadData)
         return;
 
+    // MENU owns the tiny persistent settings blob
     PowerPreventSettings settings;
     if (POWR_MENU__LoadData(POWR_PLUGIN_ID, &settings, sizeof(settings)) &&
         settings.version == POWR_SETTINGS_VERSION &&

@@ -39,6 +39,12 @@ Plugin IDs, priorities, components, metadata and stacking are configured in `mak
 
 ---
 
+## Hello World example
+
+`Hello World` is a tiny starter sysplugin. It has one hook (for Process List), registers one Sysplugin Menu page, displays a counting timer while that page is open, and saves a simple visit counter through MENU's `LoadData` / `SaveData` API.
+
+---
+
 ## PlayCoinz
 
 A big expansion of the 3DS Play Coin system, making walking and earning coins become, well, even more game-ified than before.
