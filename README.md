@@ -61,7 +61,7 @@ Side note: Do not use Play Coin setters outside of the one provided by this mod!
 
 PlayCoinz patches the Home Menu directly, with the user-facing menus and extra features provided through Rosalina.
 
-Features art by [@AnasAbdin](https://x.com/AnasAbdin) for notification top-screen images, huge thanks to him for giving permission to use them!
+Features art by [@AnasAbdin](https://x.com/AnasAbdin) for *\*secret\** top-screen images, huge thanks to him for giving permission to use them!
 
 ---
 
