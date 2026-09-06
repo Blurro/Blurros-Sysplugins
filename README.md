@@ -43,6 +43,10 @@ Plugin IDs, priorities, components, metadata and stacking are configured in `mak
 
 `Hello World` is a tiny starter Sysplugin. It has one hook (for Process List), registers one Sysplugin Menu page, displays a counting timer while that page is open, and saves a visit counter through MENU's `LoadData` / `SaveData` API.
 
+**Relevant files:**
+- `sysmodules/rosalina/source/hello.c`
+- `sysmodules/rosalina/source/hello_hooks.c`
+
 ---
 
 ## PlayCoinz
@@ -69,6 +73,34 @@ PlayCoinz patches the Home Menu directly, with the user-facing menus and extra f
 
 Features art by [@AnasAbdin](https://x.com/AnasAbdin) for *\*secret\** top-screen images, huge thanks to him for giving permission to use them!
 
+**Relevant files:**
+- `sysmodules/loader/source/playcoin.c`
+- `sysmodules/loader/source/playcoin_hooks.c`
+- `sysmodules/loader/source/playcoin_loader.s`
+- `sysmodules/rosalina/source/playcoin.c`
+- `sysmodules/rosalina/source/playcoin_hooks.c`
+- `sysmodules/rosalina/source/playcoin_helpers.c`
+- `sysmodules/rosalina/source/playcoin_menus.c`
+- `sysmodules/rosalina/source/playcoin_secrets.c`
+- `sysmodules/rosalina/source/playcoin_rosalina.s`
+
+**Markers in:**
+- `sysmodules/loader/source/loader.c`
+- `sysmodules/loader/source/patcher.c`
+
+---
+
+## blur
+
+A helper Sysplugin used by multiple of my other plugins, including PlayCoinz. It provides a custom thread and callback support for shared Rosalina-side work.
+
+**Relevant files:**
+- `sysmodules/rosalina/source/blurro.c`
+- `sysmodules/rosalina/source/blurro_hooks.c`
+
+**Markers in:**
+- `sysmodules/rosalina/source/menu.c`
+
 ---
 
 ## PowerPrevent
@@ -76,11 +108,21 @@ Features art by [@AnasAbdin](https://x.com/AnasAbdin) for *\*secret\** top-scree
 A Sysplugin version of [WerWolv's PowerPrevent](https://github.com/WerWolv/PowerPrevent_SysModule), preventing accidental shutdowns by requiring **START + POWER** instead of simply pressing POWER.
 This was made as a mini proof-of-concept that the requirement of forking Luma3DS for a single feature has been made obsolete.
 
+**Relevant files:**
+- `sysmodules/rosalina/source/powerprevent.c`
+- `sysmodules/rosalina/source/powerprevent_hooks.c`
+
+**Markers in:**
+- `sysmodules/rosalina/source/menu.c`
+
 ---
 
 ## IgnoreCfgNor
 
 A Sysplugin reimplementation of the `ignore-cfgnor` patch, originally from [lifehackerhansol/Luma3DS](https://github.com/lifehackerhansol/Luma3DS/tree/ignore-cfgnor), for systems that need `cfg:nor` requests ignored without requiring a separate Luma3DS fork.
+
+**Relevant files:**
+- `sysmodules/loader/source/ignore_cfgnor.c`
 
 ---
 
