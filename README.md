@@ -63,10 +63,9 @@ Side note: Do not use Play Coin setters outside of the one provided by this mod!
 
 * Play Coin limits uncapped
 * Progressive walking cost (+3 for each coin after the original 10 cap)
-* Tracks genuine walking-backed earnings separately from manually set coins
+* Tracks legitimate walking-backed earnings separately from manually set coins
 * Expanded Play Coin setter and statistics menus
 * Custom notifications for... *secrets* - with Club Penguin inspired difficulty tiers
-* Persistent save data designed to remain compatible as PlayCoinz expands
 * WIP Blackjack casino with gambling lol (walking to the next casino required if you get a backoff)
 
 PlayCoinz patches the Home Menu directly, with the user-facing menus and extra features provided through Rosalina.
@@ -118,6 +117,8 @@ This was made as a mini proof-of-concept that the requirement of forking Luma3DS
 ---
 
 ## IgnoreCfgNor
+
+This is ONLY for systems with a broken NVRAM and won't boot - otherwise IGNORE!<br>Since this breaks normal systems, and broken systems couldn't even boot to get this from the Online Menu, [download it here instead](https://blurro.github.io/sysplugins/online_extra/IgnoreCfgNor.0.3nx)
 
 A Sysplugin reimplementation of the `ignore-cfgnor` patch, originally from [lifehackerhansol/Luma3DS](https://github.com/lifehackerhansol/Luma3DS/tree/ignore-cfgnor), for systems that need `cfg:nor` requests ignored without requiring a separate Luma3DS fork.
 
