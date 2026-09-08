@@ -47,6 +47,10 @@ extern u32 blur_marker_menudraw_end;
 extern u32 blur_marker_menu_entered;
 extern u32 blur_marker_menu_leaving;
 extern u64 __aeabi_uldivmod(u64 numerator, u64 denominator);
+extern bool PLUGIN_MENU_MapPage(Handle sourceProcess, u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress);
+extern void PLUGIN_MENU_UnmapPage(u32 mappedBase);
+NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_MENU_MapPage);
+NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_MENU_UnmapPage);
 
 PLUGIN_DATA(blur) void* pluginTable_blur[] = {
     (void*)isServiceUsable,
@@ -56,8 +60,8 @@ PLUGIN_DATA(blur) void* pluginTable_blur[] = {
     (void*)MyThread_Create,
     (void*)&preTerminationEvent,
     (void*)svcFlushEntireDataCache,
-    (void*)svcMapProcessMemoryEx,
-    (void*)svcUnmapProcessMemoryEx,
+    (void*)PLUGIN_MENU_MapPage,
+    (void*)PLUGIN_MENU_UnmapPage,
     (void*)&blur_marker_menudraw_start,
     (void*)&blur_marker_menudraw_end,
     (void*)Draw_DrawFormattedString,
@@ -82,8 +86,7 @@ PLUGIN_DATA(blur) void* pluginTable_blur[] = {
     (void*)&menuShouldExit,
     (void*)PLUGIN_MENU_SaveData,
     (void*)PLUGIN_MENU_LoadData,
-    (void*)PLUGIN_MENU_AddOnlineEntry,
-    (void*)PLUGIN_MENU_FindFreeRange
+    (void*)PLUGIN_MENU_AddOnlineEntry
 };
 #define BLUR_HOST__isServiceUsable                  ((bool(*)(const char*))pluginTable_blur[0])
 #define BLUR_HOST__svcSleepThread                   ((void(*)(s64))pluginTable_blur[1])
@@ -91,8 +94,8 @@ PLUGIN_DATA(blur) void* pluginTable_blur[] = {
 #define BLUR_HOST__preTerminationRequested          (*(bool*)pluginTable_blur[3])
 #define BLUR_HOST__MyThread_Create                  ((Result(*)(MyThread*,void(*)(void),void*,u32,int,int))pluginTable_blur[4])
 #define BLUR_HOST__preTerminationEvent              (*(volatile Handle*)pluginTable_blur[5])
-#define BLUR_HOST__svcMapProcessMemoryEx            ((Result(*)(Handle,u32,Handle,u32,u32,MapExFlags))pluginTable_blur[7])
-#define BLUR_HOST__svcUnmapProcessMemoryEx          ((Result(*)(Handle,u32,u32))pluginTable_blur[8])
+#define BLUR_MENU__MapPage                         ((bool(*)(Handle,u32,u32*,u32*))pluginTable_blur[7])
+#define BLUR_MENU__UnmapPage                       ((void(*)(u32))pluginTable_blur[8])
 #define BLUR_HOST__blur_marker_menudraw_start       ((u32)pluginTable_blur[9])
 #define BLUR_HOST__blur_marker_menudraw_end         ((u32)pluginTable_blur[10])
 #define BLUR_HOST__Draw_DrawFormattedString         ((void(*)(u32,u32,u32,const char*,...))pluginTable_blur[11])
@@ -117,7 +120,6 @@ PLUGIN_DATA(blur) void* pluginTable_blur[] = {
 #define BLUR_MENU__SaveData                         ((bool(*)(u32,const void*,u32))pluginTable_blur[31])
 #define BLUR_MENU__LoadData                         ((bool(*)(u32,void*,u32))pluginTable_blur[32])
 #define BLUR_MENU__AddOnlineEntry                   ((bool(*)(const char*,const char*))pluginTable_blur[33])
-#define BLUR_MENU__FindFreeRange                    ((bool(*)(u32,u32*))pluginTable_blur[34])
 
 PLUGIN_BSS(blur) static MyThread plgThread;
 PLUGIN_BSS(blur) static u8 CTR_ALIGN(8) plgThreadStack[0x1000];
@@ -405,46 +407,16 @@ PLUGIN_CODE(blur) void PLUGIN_blur_OpenFeatureMenu(void)
 }
 
 
-PLUGIN_CODE(blur) bool PLUGIN_blur_MapPage(u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress)
-{
-    u32 base;
-    u32 page = sourceAddress & ~0xFFFu;
-
-    if (!mappedBase || !mappedAddress || !BLUR_MENU__FindFreeRange(0x1000u, &base))
-        return false;
-
-    if (R_FAILED(BLUR_HOST__svcMapProcessMemoryEx(
-        CUR_PROCESS_HANDLE,
-        base,
-        CUR_PROCESS_HANDLE,
-        page,
-        0x1000,
-        (MapExFlags)0)))
-    {
-        return false;
-    }
-
-    *mappedBase = base;
-    *mappedAddress = base + (sourceAddress & 0xFFFu);
-    return true;
-}
-
-PLUGIN_CODE(blur) void PLUGIN_blur_UnmapPage(u32 mappedBase)
-{
-    if (mappedBase)
-        BLUR_HOST__svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, mappedBase, 0x1000);
-}
-
 PLUGIN_CODE(blur) bool PLUGIN_blur_ReadHostWord(u32 address, u32 *value)
 {
     u32 mapBase;
     u32 mappedAddress;
 
-    if (!value || !PLUGIN_blur_MapPage(address, &mapBase, &mappedAddress))
+    if (!value || !BLUR_MENU__MapPage(CUR_PROCESS_HANDLE, address, &mapBase, &mappedAddress))
         return false;
 
     *value = *(volatile u32*)mappedAddress;
-    PLUGIN_blur_UnmapPage(mapBase);
+    BLUR_MENU__UnmapPage(mapBase);
     return true;
 }
 

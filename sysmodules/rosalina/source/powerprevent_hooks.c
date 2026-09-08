@@ -14,56 +14,25 @@ extern u32 PLUGIN_powr_ScanAndUpdate(void);
 
 #define POWR_HOST__marker                    ((u32)pluginTable_powr[0])
 #define POWR_HOST__menuCombo                 ((u32)pluginTable_powr[1])
-#define POWR_HOST__svcMapProcessMemoryEx     ((Result (*)(Handle, u32, Handle, u32, u32, MapExFlags))pluginTable_powr[6])
-#define POWR_HOST__svcUnmapProcessMemoryEx   ((Result (*)(Handle, u32, u32))pluginTable_powr[7])
-#define POWR_MENU__FindFreeRange             ((bool (*)(u32, u32 *))pluginTable_powr[8])
-#define POWR_HOST__svcFlushEntireDataCache   ((void (*)(void))pluginTable_powr[9])
-#define POWR_HOST__svcInvalidateEntireInstructionCache ((void (*)(void))pluginTable_powr[10])
+#define POWR_MENU__MapPage                   ((bool (*)(Handle, u32, u32 *, u32 *))pluginTable_powr[6])
+#define POWR_MENU__UnmapPage                 ((void (*)(u32))pluginTable_powr[7])
+#define POWR_HOST__svcFlushEntireDataCache   ((void (*)(void))pluginTable_powr[8])
+#define POWR_HOST__svcInvalidateEntireInstructionCache ((void (*)(void))pluginTable_powr[9])
 
 PLUGIN_BSS(powr) u32 powerprevent_menu_combo_addr;
 PLUGIN_BSS(powr) u32 powerprevent_hook_return_addr;
 
-
-PLUGIN_CODE(powr) static bool PLUGIN_powr_MapPage(u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress)
-{
-    u32 base;
-    u32 page = sourceAddress & ~0xFFFu;
-
-    if (!mappedBase || !mappedAddress || !POWR_MENU__FindFreeRange(0x1000u, &base))
-        return false;
-
-    if (R_FAILED(POWR_HOST__svcMapProcessMemoryEx(
-        CUR_PROCESS_HANDLE,
-        base,
-        CUR_PROCESS_HANDLE,
-        page,
-        0x1000,
-        (MapExFlags)0)))
-    {
-        return false;
-    }
-
-    *mappedBase = base;
-    *mappedAddress = base + (sourceAddress & 0xFFFu);
-    return true;
-}
-
-PLUGIN_CODE(powr) static void PLUGIN_powr_UnmapPage(u32 mappedBase)
-{
-    if (mappedBase)
-        POWR_HOST__svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, mappedBase, 0x1000);
-}
 
 PLUGIN_CODE(powr) static bool PLUGIN_powr_ReadHostWord(u32 address, u32 *value)
 {
     u32 mappedBase;
     u32 mappedAddress;
 
-    if (!value || !PLUGIN_powr_MapPage(address, &mappedBase, &mappedAddress))
+    if (!value || !POWR_MENU__MapPage(CUR_PROCESS_HANDLE, address, &mappedBase, &mappedAddress))
         return false;
 
     *value = *(volatile u32 *)mappedAddress;
-    PLUGIN_powr_UnmapPage(mappedBase);
+    POWR_MENU__UnmapPage(mappedBase);
     return true;
 }
 
@@ -135,7 +104,7 @@ PLUGIN_CODE(powr) bool PLUGIN_powr_InstallHook(void)
     if (!marker || (marker & 3u) != 0 || (marker & 0xFFFu) > 0xFF0u)
         return false;
 
-    if (!PLUGIN_powr_MapPage(marker, &mappedBase, &mappedAddress))
+    if (!POWR_MENU__MapPage(CUR_PROCESS_HANDLE, marker, &mappedBase, &mappedAddress))
         return false;
 
     instr0 = *(volatile u32 *)mappedAddress;
@@ -156,7 +125,7 @@ PLUGIN_CODE(powr) bool PLUGIN_powr_InstallHook(void)
         menuComboTarget != POWR_HOST__menuCombo ||
         (!nexusShape && !lumaShape))
     {
-        PLUGIN_powr_UnmapPage(mappedBase);
+        POWR_MENU__UnmapPage(mappedBase);
         return false;
     }
 
@@ -167,7 +136,7 @@ PLUGIN_CODE(powr) bool PLUGIN_powr_InstallHook(void)
     // replace the scan call with our literal jump
     *(volatile u32 *)(mappedAddress + 4u) = (u32)PLUGIN_powr_KeyScanHook;
     *(volatile u32 *)mappedAddress = 0xE51FF004u;
-    PLUGIN_powr_UnmapPage(mappedBase);
+    POWR_MENU__UnmapPage(mappedBase);
     PLUGIN_powr_SyncExecutableChanges();
     return true;
 }

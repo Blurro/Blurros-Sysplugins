@@ -76,6 +76,7 @@ extern Result PLUGIN_coin_svcMapProcessMemoryEx(
     u32 flags
 );
 extern Result PLUGIN_coin_svcUnmapProcessMemoryEx(Handle process, u32 addr, u32 size);
+extern Result PLUGIN_coin_svcControlMemoryUnsafe(u32 *out, u32 addr, u32 size, MemOp op, MemPerm perm);
 extern u32 PLUGIN_coin_svcConvertVAToPA(const void *va, bool writeCheck);
 extern void PLUGIN_coin_svcFlushEntireDataCache(void);
 extern void PLUGIN_coin_svcInvalidateEntireInstructionCache(void);
@@ -331,6 +332,15 @@ __asm__(
     "svc 0xA1\n"
     "bx lr\n"
 
+    ".global PLUGIN_coin_svcControlMemoryUnsafe\n"
+    ".type PLUGIN_coin_svcControlMemoryUnsafe, %function\n"
+    "PLUGIN_coin_svcControlMemoryUnsafe:\n"
+    "str r4, [sp, #-4]!\n"
+    "ldr r4, [sp, #4]\n"
+    "svc 0xA3\n"
+    "ldr r4, [sp], #4\n"
+    "bx lr\n"
+
     ".global PLUGIN_coin_svcSendSyncRequest\n"
     ".type PLUGIN_coin_svcSendSyncRequest, %function\n"
     "PLUGIN_coin_svcSendSyncRequest:\n"
@@ -398,38 +408,115 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_FindFreeRange(u32 size, u32 *out)
     return false;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_FindFreePage(u32 *out)
+PLUGIN_CODE(coin) static bool PLUGIN_coin_AllocAliasGuard(u32 address)
 {
-    return PLUGIN_coin_FindFreeRange(0x1000u, out);
+    u32 allocated = 0;
+    Result result = PLUGIN_coin_svcControlMemoryUnsafe(
+        &allocated,
+        address,
+        0x1000u,
+        MEMOP_ALLOC | MEMOP_REGION_SYSTEM,
+        MEMPERM_READWRITE
+    );
+    return R_SUCCEEDED(result) && allocated == address;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_MapOwnPage(u32 source, u32 *mapBase, u32 *mapped)
+PLUGIN_CODE(coin) static void PLUGIN_coin_FreeAliasGuard(u32 address)
 {
-    u32 destination;
-    if (!PLUGIN_coin_FindFreePage(&destination))
-        return false;
+    u32 out;
+    (void)PLUGIN_coin_svcControlMemoryUnsafe(
+        &out,
+        address,
+        0x1000u,
+        MEMOP_FREE | MEMOP_REGION_SYSTEM,
+        MEMPERM_DONTCARE
+    );
+}
 
-    if (R_FAILED(PLUGIN_coin_svcMapProcessMemoryEx(
-        CUR_PROCESS_HANDLE,
-        destination,
-        CUR_PROCESS_HANDLE,
-        source & ~0xFFFu,
-        0x1000,
-        0
-    )))
+PLUGIN_CODE(coin) static bool PLUGIN_coin_MapGuardedRange(
+    Handle sourceProcess,
+    u32 sourcePage,
+    u32 size,
+    u32 *mapBase
+)
+{
+    u32 guardBase;
+    u32 aliasBase;
+    u32 rightGuard;
+    u32 scanSize;
+
+    if (!mapBase || !size || (sourcePage & 0xFFFu) || (size & 0xFFFu) ||
+        size > 0xFFFFDFFFu)
     {
         return false;
     }
 
-    *mapBase = destination;
-    *mapped = destination + (source & 0xFFFu);
+    scanSize = size + 0x2000u;
+    if (!PLUGIN_coin_FindFreeRange(scanSize, &guardBase))
+        return false;
+
+    aliasBase = guardBase + 0x1000u;
+    rightGuard = aliasBase + size;
+
+    if (!PLUGIN_coin_AllocAliasGuard(guardBase))
+        return false;
+
+    if (!PLUGIN_coin_AllocAliasGuard(rightGuard))
+    {
+        PLUGIN_coin_FreeAliasGuard(guardBase);
+        return false;
+    }
+
+    if (R_FAILED(PLUGIN_coin_svcMapProcessMemoryEx(
+            CUR_PROCESS_HANDLE,
+            aliasBase,
+            sourceProcess,
+            sourcePage,
+            size,
+            0)))
+    {
+        PLUGIN_coin_FreeAliasGuard(rightGuard);
+        PLUGIN_coin_FreeAliasGuard(guardBase);
+        return false;
+    }
+
+    *mapBase = aliasBase;
+    return true;
+}
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_UnmapGuardedRange(u32 mapBase, u32 size)
+{
+    if (!mapBase || !size || (size & 0xFFFu))
+        return;
+
+    if (R_SUCCEEDED(PLUGIN_coin_svcUnmapProcessMemoryEx(
+            CUR_PROCESS_HANDLE,
+            mapBase,
+            size)))
+    {
+        PLUGIN_coin_FreeAliasGuard(mapBase - 0x1000u);
+        PLUGIN_coin_FreeAliasGuard(mapBase + size);
+    }
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_MapOwnPage(u32 source, u32 *mapBase, u32 *mapped)
+{
+    if (!mapped || !PLUGIN_coin_MapGuardedRange(
+            CUR_PROCESS_HANDLE,
+            source & ~0xFFFu,
+            0x1000u,
+            mapBase))
+    {
+        return false;
+    }
+
+    *mapped = *mapBase + (source & 0xFFFu);
     return true;
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_UnmapOwnPage(u32 mapBase)
 {
-    if (mapBase)
-        PLUGIN_coin_svcUnmapProcessMemoryEx(CUR_PROCESS_HANDLE, mapBase, 0x1000);
+    PLUGIN_coin_UnmapGuardedRange(mapBase, 0x1000u);
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_PatchWords(
@@ -976,16 +1063,11 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
 PLUGIN_CODE(coin) static bool PLUGIN_coin_LoadNewslistIcons(Handle process, u32 iconBase)
 {
     u32 scratch = 0;
-    if (!PLUGIN_coin_FindFreeRange(COIN_NEWSLIST_ICON_ALLOC_SIZE, &scratch))
-        return false;
-
-    if (R_FAILED(PLUGIN_coin_svcMapProcessMemoryEx(
-            CUR_PROCESS_HANDLE,
-            scratch,
+    if (!PLUGIN_coin_MapGuardedRange(
             process,
             iconBase,
             COIN_NEWSLIST_ICON_ALLOC_SIZE,
-            0)))
+            &scratch))
     {
         return false;
     }
@@ -1028,11 +1110,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_LoadNewslistIcons(Handle process, u32 
     if (ok)
         PLUGIN_coin_svcFlushEntireDataCache();
 
-    PLUGIN_coin_svcUnmapProcessMemoryEx(
-        CUR_PROCESS_HANDLE,
-        scratch,
-        COIN_NEWSLIST_ICON_ALLOC_SIZE
-    );
+    PLUGIN_coin_UnmapGuardedRange(scratch, COIN_NEWSLIST_ICON_ALLOC_SIZE);
     return ok;
 }
 

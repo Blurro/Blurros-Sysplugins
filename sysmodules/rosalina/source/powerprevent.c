@@ -18,6 +18,10 @@ typedef struct
 
 extern u32 powerprevent_marker_key_scan;
 extern u32 menuCombo;
+extern bool PLUGIN_MENU_MapPage(Handle sourceProcess, u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress);
+extern void PLUGIN_MENU_UnmapPage(u32 mappedBase);
+NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_MENU_MapPage);
+NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_MENU_UnmapPage);
 
 PLUGIN_DATA(powr) void *pluginTable_powr[] = {
     (void *)&powerprevent_marker_key_scan,
@@ -26,9 +30,8 @@ PLUGIN_DATA(powr) void *pluginTable_powr[] = {
     (void *)MCUHWC_ReadRegister,
     (void *)MCUHWC_WriteRegister,
     (void *)mcuHwcExit,
-    (void *)svcMapProcessMemoryEx,
-    (void *)svcUnmapProcessMemoryEx,
-    (void *)PLUGIN_MENU_FindFreeRange,
+    (void *)PLUGIN_MENU_MapPage,
+    (void *)PLUGIN_MENU_UnmapPage,
     (void *)svcFlushEntireDataCache,
     (void *)svcInvalidateEntireInstructionCache,
     (void *)PLUGIN_MENU_AddItem,
@@ -47,16 +50,16 @@ PLUGIN_DATA(powr) void *pluginTable_powr[] = {
 #define POWR_HOST__MCUHWC_ReadRegister     ((Result (*)(u8, void *, u32))pluginTable_powr[3])
 #define POWR_HOST__MCUHWC_WriteRegister    ((Result (*)(u8, const void *, u32))pluginTable_powr[4])
 #define POWR_HOST__mcuHwcExit              ((void (*)(void))pluginTable_powr[5])
-#define POWR_MENU__AddItem                 ((bool (*)(PluginMenuRegistration *, u32, const char *, void (*)(void), u32))pluginTable_powr[11])
-#define POWR_HOST__Draw_Lock               ((void (*)(void))pluginTable_powr[12])
-#define POWR_HOST__Draw_Unlock             ((void (*)(void))pluginTable_powr[13])
-#define POWR_HOST__Draw_ClearFramebuffer   ((void (*)(void))pluginTable_powr[14])
-#define POWR_HOST__Draw_DrawString         ((u32 (*)(u32, u32, u32, const char *))pluginTable_powr[15])
-#define POWR_HOST__Draw_FlushFramebuffer   ((void (*)(void))pluginTable_powr[16])
-#define POWR_HOST__waitInput               ((u32 (*)(void))pluginTable_powr[17])
-#define POWR_HOST__menuShouldExit          (*(volatile bool *)pluginTable_powr[18])
-#define POWR_MENU__SaveData                ((bool (*)(u32, const void *, u32))pluginTable_powr[19])
-#define POWR_MENU__LoadData                ((bool (*)(u32, void *, u32))pluginTable_powr[20])
+#define POWR_MENU__AddItem                 ((bool (*)(PluginMenuRegistration *, u32, const char *, void (*)(void), u32))pluginTable_powr[10])
+#define POWR_HOST__Draw_Lock               ((void (*)(void))pluginTable_powr[11])
+#define POWR_HOST__Draw_Unlock             ((void (*)(void))pluginTable_powr[12])
+#define POWR_HOST__Draw_ClearFramebuffer   ((void (*)(void))pluginTable_powr[13])
+#define POWR_HOST__Draw_DrawString         ((u32 (*)(u32, u32, u32, const char *))pluginTable_powr[14])
+#define POWR_HOST__Draw_FlushFramebuffer   ((void (*)(void))pluginTable_powr[15])
+#define POWR_HOST__waitInput               ((u32 (*)(void))pluginTable_powr[16])
+#define POWR_HOST__menuShouldExit          (*(volatile bool *)pluginTable_powr[17])
+#define POWR_MENU__SaveData                ((bool (*)(u32, const void *, u32))pluginTable_powr[18])
+#define POWR_MENU__LoadData                ((bool (*)(u32, void *, u32))pluginTable_powr[19])
 
 #define POWR_PLUGIN_ID 0x72776F70u
 #define POWR_SETTINGS_VERSION 1u

@@ -16,6 +16,10 @@
 
 extern bool PLUGIN_helo_InstallHook(void);
 extern bool PLUGIN_helo_UninstallHook(void);
+extern bool PLUGIN_MENU_MapPage(Handle sourceProcess, u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress);
+extern void PLUGIN_MENU_UnmapPage(u32 mappedBase);
+NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_MENU_MapPage);
+NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_MENU_UnmapPage);
 
 // Host and MENU calls go through repaired pointers.
 PLUGIN_DATA(helo) void *pluginTable_helo[] = {
@@ -29,9 +33,8 @@ PLUGIN_DATA(helo) void *pluginTable_helo[] = {
     (void *)&menuShouldExit,
     (void *)PLUGIN_MENU_SaveData,
     (void *)PLUGIN_MENU_LoadData,
-    (void *)PLUGIN_MENU_FindFreeRange,
-    (void *)svcMapProcessMemoryEx,
-    (void *)svcUnmapProcessMemoryEx,
+    (void *)PLUGIN_MENU_MapPage,
+    (void *)PLUGIN_MENU_UnmapPage,
     (void *)svcFlushEntireDataCache,
     (void *)svcInvalidateEntireInstructionCache,
     (void *)RosalinaMenu_ProcessList,
@@ -48,7 +51,7 @@ PLUGIN_DATA(helo) void *pluginTable_helo[] = {
 #define HELLO_HOST__menuShouldExit         (*(volatile bool *)pluginTable_helo[7])
 #define HELLO_MENU__SaveData               ((bool (*)(u32, const void *, u32))pluginTable_helo[8])
 #define HELLO_MENU__LoadData               ((bool (*)(u32, void *, u32))pluginTable_helo[9])
-#define HELLO_HOST__Draw_DrawMenuFrame     ((void (*)(const char *))pluginTable_helo[16])
+#define HELLO_HOST__Draw_DrawMenuFrame     ((void (*)(const char *))pluginTable_helo[15])
 
 PLUGIN_RODATA(helo) static const char g_helloMenuTitle[] = "Hello World";
 PLUGIN_RODATA(helo) static const char g_helloHijackedTitle[] = "Hijacked by Hello World hook";

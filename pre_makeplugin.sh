@@ -228,7 +228,7 @@ def decompress_lz10(blob):
 
 
 # Normal plugin metadata versions consumed directly by makeplugin.sh.
-for version in (100, 101, 102, 103, 104):
+for version in (100, 101, 102, 103, 104, 105):
     Path(f"version{version}.bin").write_bytes(MAGIC + struct.pack("<I", version))
 
 compressed_items = [

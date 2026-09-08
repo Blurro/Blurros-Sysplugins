@@ -72,11 +72,12 @@ LOADER_PLUGIN_CONFIG=(
 # Files are concatenated in listed order with no gaps, then the combined metadata is padded to 16 bytes.
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
-    "blur_r|version101.bin"
-    "coin_r|version104.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
-    "powr_r|version100.bin"
-    "hello_r|version100.bin"
-    "coin_l|version104.bin"
+    "blur_r|version102.bin"
+    "coin_r|version105.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "powr_r|version101.bin"
+    "hello_r|version101.bin"
+    "coin_l|version105.bin"
+    "cfgn_l|version101.bin"
 )
 
 # GitHub update payloads must be standalone single-entry files.

@@ -21,6 +21,8 @@ typedef struct PluginMenuRegistration
 extern void *pluginTable_blur[];
 
 #define BLUR_HOST__svcFlushEntireDataCache          ((void(*)(void))pluginTable_blur[6])
+#define BLUR_MENU__MapPage                         ((bool(*)(Handle,u32,u32*,u32*))pluginTable_blur[7])
+#define BLUR_MENU__UnmapPage                       ((void(*)(u32))pluginTable_blur[8])
 #define BLUR_HOST__blur_marker_menudraw_start       ((u32)pluginTable_blur[9])
 #define BLUR_HOST__blur_marker_menudraw_end         ((u32)pluginTable_blur[10])
 #define BLUR_HOST__blur_marker_menu_entered         ((u32)pluginTable_blur[12])
@@ -37,8 +39,6 @@ extern const char g_blurFeatureTitle[];
 extern const char g_blurOnlineV1Title[];
 extern const char g_blurOnlineV1Url[];
 extern PluginMenuRegistration g_blurMenuRegistration;
-extern bool PLUGIN_blur_MapPage(u32 sourceAddress, u32 *mappedBase, u32 *mappedAddress);
-extern void PLUGIN_blur_UnmapPage(u32 mappedBase);
 extern void PLUGIN_blur_RunMenuDrawHookBody(Menu *currentMenu);
 extern void PLUGIN_blur_SetMenuFreezeInternal(bool freeze);
 extern bool PLUGIN_blur_EnsureCoolThread(void);
@@ -98,7 +98,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuDrawHook(u32 *saved0, u32 *
     u32 instr0;
     u32 instr1;
 
-    if (!PLUGIN_blur_MapPage(start, &hostMapBase, &hostAddress))
+    if (!BLUR_MENU__MapPage(CUR_PROCESS_HANDLE, start, &hostMapBase, &hostAddress))
         return false;
 
     instr0 = *(volatile u32*)hostAddress;
@@ -106,7 +106,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuDrawHook(u32 *saved0, u32 *
 
     if (end <= start + 8u || end - start > 0x400u)
     {
-        PLUGIN_blur_UnmapPage(hostMapBase);
+        BLUR_MENU__UnmapPage(hostMapBase);
         return false;
     }
 
@@ -120,7 +120,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuDrawHook(u32 *saved0, u32 *
     *(volatile u32*)(hostAddress + 4) = (u32)PLUGIN_blur_MenuDrawHook;
     *(volatile u32*)hostAddress = 0xE51FF004;
 
-    PLUGIN_blur_UnmapPage(hostMapBase);
+    BLUR_MENU__UnmapPage(hostMapBase);
     return true;
 }
 
@@ -175,7 +175,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_RestoreHostWords(
     u32 mapBase;
     u32 mappedAddress;
 
-    if (!PLUGIN_blur_MapPage(address, &mapBase, &mappedAddress))
+    if (!BLUR_MENU__MapPage(CUR_PROCESS_HANDLE, address, &mapBase, &mappedAddress))
         return false;
 
     u32 current0 = *(volatile u32*)mappedAddress;
@@ -183,19 +183,19 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_RestoreHostWords(
 
     if (current0 == word0 && current1 == word1)
     {
-        PLUGIN_blur_UnmapPage(mapBase);
+        BLUR_MENU__UnmapPage(mapBase);
         return true;
     }
 
     if (current0 != 0xE51FF004u || current1 != expectedHook)
     {
-        PLUGIN_blur_UnmapPage(mapBase);
+        BLUR_MENU__UnmapPage(mapBase);
         return false;
     }
 
     *(volatile u32*)mappedAddress = word0;
     *(volatile u32*)(mappedAddress + 4) = word1;
-    PLUGIN_blur_UnmapPage(mapBase);
+    BLUR_MENU__UnmapPage(mapBase);
     return true;
 }
 
@@ -254,7 +254,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuFreezeEnterHook(u32 *saved0
     u32 setupTarget;
     u32 returnTarget;
 
-    if (!PLUGIN_blur_MapPage(marker, &hostMapBase, &hostAddress))
+    if (!BLUR_MENU__MapPage(CUR_PROCESS_HANDLE, marker, &hostMapBase, &hostAddress))
         return false;
 
     instr0 = *(volatile u32*)hostAddress;
@@ -266,7 +266,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuFreezeEnterHook(u32 *saved0
         (instr1 & 0x01000000u) != 0 ||
         setupTarget != (u32)BLUR_HOST__Draw_SetupFramebuffer)
     {
-        PLUGIN_blur_UnmapPage(hostMapBase);
+        BLUR_MENU__UnmapPage(hostMapBase);
         return false;
     }
 
@@ -276,7 +276,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuFreezeEnterHook(u32 *saved0
     blur_menu_enter_return_addr = returnTarget;
     *(volatile u32*)(hostAddress + 4) = (u32)PLUGIN_blur_MenuEnterFreezeHook;
     *(volatile u32*)hostAddress = 0xE51FF004u;
-    PLUGIN_blur_UnmapPage(hostMapBase);
+    BLUR_MENU__UnmapPage(hostMapBase);
     return true;
 }
 
@@ -290,7 +290,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuFreezeLeaveHook(u32 *saved0
     u32 restoreTarget;
     u32 freeTarget;
 
-    if (!PLUGIN_blur_MapPage(marker, &hostMapBase, &hostAddress))
+    if (!BLUR_MENU__MapPage(CUR_PROCESS_HANDLE, marker, &hostMapBase, &hostAddress))
         return false;
 
     instr0 = *(volatile u32*)hostAddress;
@@ -303,7 +303,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuFreezeLeaveHook(u32 *saved0
         restoreTarget != (u32)BLUR_HOST__Draw_RestoreFramebuffer ||
         freeTarget != (u32)BLUR_HOST__Draw_FreeFramebufferCache)
     {
-        PLUGIN_blur_UnmapPage(hostMapBase);
+        BLUR_MENU__UnmapPage(hostMapBase);
         return false;
     }
 
@@ -313,7 +313,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_InstallMenuFreezeLeaveHook(u32 *saved0
     blur_menu_leave_return_addr = marker + 8u;
     *(volatile u32*)(hostAddress + 4) = (u32)PLUGIN_blur_MenuLeaveFreezeHook;
     *(volatile u32*)hostAddress = 0xE51FF004u;
-    PLUGIN_blur_UnmapPage(hostMapBase);
+    BLUR_MENU__UnmapPage(hostMapBase);
     return true;
 }
 

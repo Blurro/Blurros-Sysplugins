@@ -81,11 +81,11 @@ LOADER_PLUGIN_CONFIG=(
 # Files are concatenated in listed order with no gaps, then the combined metadata is padded to 16 bytes.
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
-    "blurPLGbase|version101.bin"
-    "coinrosalina|version104.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
-    "PowerPrevent|version100.bin"
-    "HelloWorld|version100.bin"
-    "coinloader|version104.bin"
+    "blurPLGbase|version102.bin"
+    "coinrosalina|version105.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "PowerPrevent|version101.bin"
+    "HelloWorld|version101.bin"
+    "coinloader|version105.bin"
 )
 
 # Tip: 3nx file data can be stacked, to make one .3nx file hold multiple plugins. Place generated .3nx files at SD:/luma/plugins/
