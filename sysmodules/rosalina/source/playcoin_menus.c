@@ -268,6 +268,9 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebugBucketValuesNoLock(bool clear
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebugLiveRows(bool dayChanged)
 {
+    if (!g_coinProgressiveCostEnabled)
+        return;
+
     COIN_HOST__Draw_Lock();
     PLUGIN_coin_DrawDebugTimestampNoLock();
     if (dayChanged)
@@ -328,9 +331,12 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
         }
     }
 
-    COIN_HOST__Draw_DrawString(COIN_DEBUG_BUCKET_X, 36u, COLOR_GRAY, g_coinBucketGroup);
-    PLUGIN_coin_DrawDebugTimestampNoLock();
-    PLUGIN_coin_DrawDebugBucketValuesNoLock(false);
+    if (g_coinProgressiveCostEnabled)
+    {
+        COIN_HOST__Draw_DrawString(COIN_DEBUG_BUCKET_X, 36u, COLOR_GRAY, g_coinBucketGroup);
+        PLUGIN_coin_DrawDebugTimestampNoLock();
+        PLUGIN_coin_DrawDebugBucketValuesNoLock(false);
+    }
 
     COIN_HOST__Draw_DrawString(20, 228, RGB565(15, 31, 15), g_coinDebugControls);
     COIN_HOST__Draw_FlushFramebuffer();
