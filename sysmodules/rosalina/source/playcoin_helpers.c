@@ -345,14 +345,37 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
     if (currentDay == lastDay)
         return false;
 
-    u16 oldToday = PLUGIN_coin_GetTodayWalked();
-    if (currentDay < lastDay || currentDay - lastDay >= 7u)
+    u16 newToday = 0;
+    if (currentDay < lastDay)
+    {
+        u32 rollback = lastDay - currentDay;
+        if (rollback <= COIN_DAY_HISTORY_COUNT)
+        {
+            // The selected past day becomes Today. Only days older than it can
+            // remain valid relative to the newly selected calendar date.
+            newToday = PLUGIN_coin_GetHistoryDay(rollback - 1u);
+            for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
+            {
+                u32 source = i + rollback;
+                u16 value = source < COIN_DAY_HISTORY_COUNT ?
+                    PLUGIN_coin_GetHistoryDay(source) : 0;
+                PLUGIN_coin_SetHistoryDay(i, value);
+            }
+        }
+        else
+        {
+            for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
+                PLUGIN_coin_SetHistoryDay(i, 0);
+        }
+    }
+    else if (currentDay - lastDay >= 7u)
     {
         for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
             PLUGIN_coin_SetHistoryDay(i, 0);
     }
     else
     {
+        u16 oldToday = PLUGIN_coin_GetTodayWalked();
         u32 delta = currentDay - lastDay;
         for (s32 i = (s32)COIN_DAY_HISTORY_COUNT - 1; i >= 0; i--)
         {
@@ -366,7 +389,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
     }
 
     g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] = currentDay;
-    PLUGIN_coin_SetTodayWalked(0);
+    PLUGIN_coin_SetTodayWalked(newToday);
     g_coinExtendedDirty = true;
     return true;
 }

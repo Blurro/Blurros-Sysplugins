@@ -584,6 +584,23 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SyncProgressiveToday(void)
     COIN_HOST__svcFlushEntireDataCache();
 }
 
+PLUGIN_CODE(coin) static bool PLUGIN_coin_TodayExceedsHomeCounter(void)
+{
+    return PLUGIN_coin_stepDiagnostics.valid == 1u &&
+        PLUGIN_coin_GetTodayWalked() > PLUGIN_coin_stepDiagnostics.coinsToday;
+}
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTodayToHomeCounter(void)
+{
+    if (!PLUGIN_coin_TodayExceedsHomeCounter())
+        return;
+
+    // HOME may clear its own counter later than the calendar bucket. It is only
+    // a one-way ceiling: never raise the date-backed value from HOME's stale day.
+    PLUGIN_coin_SetTodayWalked((u16)PLUGIN_coin_stepDiagnostics.coinsToday);
+    g_coinExtendedDirty = true;
+}
+
 #define PLAYCOIN_SECRETS_CHECKS
 #include "playcoin_secrets.c"
 #undef PLAYCOIN_SECRETS_CHECKS
@@ -623,6 +640,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     bool gambleEvent = g_coinGambleEvent;
 
     PLUGIN_coin_AddTodayWalked(earnedBatch);
+    PLUGIN_coin_ClampTodayToHomeCounter();
     PLUGIN_coin_SyncProgressiveToday();
 
     if (earnedBatch > 0 || !g_patchedHome)
@@ -1072,7 +1090,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OnBlurTick(u64 delta)
             PLUGIN_coin_UpdateDayHistory();
             if (coinsBin != g_lastCoins || PLUGIN_coin_PendingEarned() ||
                 g_coinSavePending || coinsEverSpent != g_lastEverSpent ||
-                g_coinExtendedDirty)
+                g_coinExtendedDirty || PLUGIN_coin_TodayExceedsHomeCounter())
             {
                 PLUGIN_coin_HandleCoins();
             }

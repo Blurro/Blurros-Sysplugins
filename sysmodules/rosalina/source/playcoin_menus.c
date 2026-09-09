@@ -321,8 +321,11 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
 
         COIN_HOST__Draw_DrawString(20, 172, COLOR_GRAY, g_coinProgressionGroup);
         COIN_HOST__Draw_DrawFormattedString(20, 185, COLOR_WHITE, g_coinTodayFmt, d.coinsToday);
-        COIN_HOST__Draw_DrawFormattedString(20, 198, COLOR_YELLOW, g_coinNextCoinFmt, d.coinsToday + 1u, nextCost);
-        COIN_HOST__Draw_DrawFormattedString(20, 211, COLOR_YELLOW, g_coinHistoryNeededFmt, remaining);
+        if (g_coinProgressiveCostEnabled)
+        {
+            COIN_HOST__Draw_DrawFormattedString(20, 198, COLOR_YELLOW, g_coinNextCoinFmt, d.coinsToday + 1u, nextCost);
+            COIN_HOST__Draw_DrawFormattedString(20, 211, COLOR_YELLOW, g_coinHistoryNeededFmt, remaining);
+        }
     }
 
     COIN_HOST__Draw_DrawString(COIN_DEBUG_BUCKET_X, 36u, COLOR_GRAY, g_coinBucketGroup);
