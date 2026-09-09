@@ -39,6 +39,8 @@ PLUGIN_coin_stepDiagnostics:
     .word 0 @ progressive step remainder
     .word 0 @ flat step remainder
     .word 0 @ split progression active
+    .word 0 @ calculation validity
+    .word 0 @ invalid base pending
 @ -------- end of rosalina mirroring
 
 @ below is this side only
@@ -50,6 +52,10 @@ PLUGIN_coin_homePtr:
 PLUGIN_coin_binLast:
     .word 0
 
+.global PLUGIN_coin_handoffControl
+PLUGIN_coin_handoffControl:
+    .word 0
+
 .global PLUGIN_coin_homeLoaderPatch
 .type   PLUGIN_coin_homeLoaderPatch, %function
 PLUGIN_coin_homeLoaderPatch:
@@ -57,6 +63,10 @@ PLUGIN_coin_homeLoaderPatch:
 
     adr     r9, PLUGIN_coin_homePtr
     ldr     r9, [r9]              @ ptr to homemenu store
+    ldr     r8, [r9, #0x24]
+    mov     r7, #1
+    str     r7, [r8]
+    mcr     p15, 0, r7, c7, c10, 5 @ publish inFlight before pointer loads
 
     ldr     r8, [r9, #8]
     ldr     r7, [sp, #0xc]
@@ -70,24 +80,18 @@ PLUGIN_coin_homeLoaderPatch:
     mov     r7, #1
     str     r7, [r8, #8]
 
-    @ store post-calc earnings to coinEarn
-    ldr     r8, [r9, #8]          @ g_coinEarn addr
-    @cmp     r8, #0
-    @beq     skipEarnDiff
-    add     r8, r8, #4		      @ point to pre-calc holder
-    ldrh    r11, [r8]             @ pre-calc coins val
-    sub     r7, r6, r11           @ this is coins - (pre-calc coins), coins is always same or higher
-    sub     r8, r8, #4            @ point back to coinEarn
+    @ consume only state produced by this calculation
+    ldr     r10, [r8, #52]
+    ldr     r11, [r8, #32]
+    ldr     r12, [r8, #48]
+    mov     r7, #0
+    str     r7, [r8, #52]
+    str     r7, [r8, #32]
 
-    ldr     r10, [r8, #48]
-    cmp     r10, #0
-    ldrne   r7, [r8, #32]         @ split wallet mode still tracks progressive earnings
-
-    ldrh    r5, [r8]
-    add     r7, r5, r7
-    strh    r7, [r8]              @ store increased coinEarn (post-calc profits)
-
-    cmp     r10, #0
+    @ split progression state is valid only when the cost hook ran
+    cmp     r12, #0
+    beq     afterSplitProgression
+    tst     r10, #2
     beq     afterSplitProgression
     ldr     r7, [r8, #36]
     strh    r7, [r4, #6]
@@ -106,103 +110,117 @@ PLUGIN_coin_homeLoaderPatch:
     str     r7, [r8, #48]
 afterSplitProgression:
 
+    @ no current pre-hook means no persistent accounting
+    tst     r10, #1
+    beq     finishHomeCalculation
+
+    ldrh    r5, [r8, #4]          @ current invocation pre-calc coins
+    cmp     r6, r5
+    subhs   r7, r6, r5
+    movlo   r7, #0
+
+    cmp     r12, #0
+    beq     currentEarnReady
+    tst     r10, #2
+    movne   r7, r11               @ tracked progressive earnings
+    moveq   r7, #0
+currentEarnReady:
+    mov     r11, r5               @ keep pre-calc coins for reconciliation
+    ldrh    r5, [r8]
+    add     r7, r5, r7
+    strh    r7, [r8]
+
     @ coinsSpent calc
-    mov     r5, #0                @ coinsSpent = 0
+    mov     r5, #0
     ldr     r10, [r9]
-    ldrh    r10, [r10]            @ load prev coinDat val
-    cmp     r10, r11              @ if coinsDat <= syscoins(pre-calc coins), jump past
+    ldrh    r10, [r10]            @ previous accepted Home Menu coins
+    cmp     r10, r11
     ble     skipSpent
-    sub     r5, r10, r11          @ r5 = coinsDat - syscoins
-    cmp     r5, #0x12C            @ 300
-    movhi   r5, #0x12C            @ clamp to 300
+    sub     r5, r10, r11
+    cmp     r5, #0x12C
+    movhi   r5, #0x12C
 skipSpent:
-    @ bad base: bit15 tells the first pass to ignore fake historical spend
-    ldr     r8, [r9, #8]          @ g_coinChange addr
-    ldrh    r7, [r8, #2]         @ coinsSpent / transient invalid-base marker
-    tst     r7, #0x8000
+    ldr     r8, [r9, #8]
+    ldrh    r12, [r8, #2]
+    ldr     r10, [r8, #56]
+    cmp     r10, #0
+    orrne   r12, r12, #0x8000
+    tst     r12, #0x8000
     movne   r5, #0
 
-    ldr     r7, [r9, #4]          @ g_coinBin addr
-    add     r7, r7, #4            @ r7 = &coinRec
-    ldr     r10, [r7]             @ r10 = coinRec
+    ldr     r7, [r9, #4]
+    add     r7, r7, #4
+    ldr     r10, [r7]
     cmp     r10, r5
-    movlo   r5, r10               @ tracked spend stops when coinsRec reaches zero
+    movlo   r5, r10
     sub     r10, r10, r5
-    str     r10, [r7]             @ store updated coinRec
+    str     r10, [r7]
 
-    @ increment coinsEverSpent by the tracked portion only
-    ldr     r8, [r9, #4]          @ g_coinBin addr
-    add     r8, r8, #12           @ point to coinsEverSpent
+    ldr     r8, [r9, #4]
+    add     r8, r8, #12
     ldr     r7, [r8]
-    add     r7, r7, r5            @ coinsEverSpent + tracked coinsSpent
+    add     r7, r7, r5
     str     r7, [r8]
 
-    @ wipe coinsSpent, keep only Loader's one-shot bad-base marker
-    ldr     r8, [r9, #8]          @ g_coinEarn addr
-    add     r8, r8, #2 		      @ point to coinsSpent
-    ldrh    r7, [r8]
-    tst     r7, #0x8000
-    bne     keepInvalidBaseMarker
-    mov     r5, #0
-    strh    r5, [r8]              @ set coinsSpent to 0
-keepInvalidBaseMarker:
-@skipEarnDiff:
-    ldr     r5, [r9, #4]          @ g_coinBin addr
-    ldr     r7, [r5]              @ coinBin (32-bit)
+    @ a valid post consumes coinsSpent and the invalid-base marker
+    ldr     r8, [r9, #8]
+    mov     r10, #0
+    strh    r10, [r8, #2]
+    str     r10, [r8, #56]
+
+    ldr     r5, [r9, #4]
+    ldr     r7, [r5]
     adr     r5, PLUGIN_coin_binLast
     str     r7, [r5]
 
-    @ bad base: keep the wallet and add only coins genuinely earned this pass
-    ldr     r8, [r9, #8]          @ g_coinChange addr
-    ldrh    r10, [r8, #2]
-    tst     r10, #0x8000
+    tst     r12, #0x8000
     beq     validBaseBinLogic
-    sub     r10, r6, r11          @ this hook's genuine earned amount
+    cmp     r6, r11
+    subhs   r10, r6, r11
+    movlo   r10, #0
     add     r7, r7, r10
-    mov     r6, r7                @ invalid recovery rebases system side to wallet
+    mov     r6, r7
     b       afterBinLogic
 
 validBaseBinLogic:
-    @ expectedVanilla = min(starting coinBin, 300)
-    @ historicalSpend = max(expectedVanilla - preCalcGamecoin, 0)
-    @ genuineEarn     = postCalcGamecoin - preCalcGamecoin
-    @ final coinBin   = starting coinBin - historicalSpend + genuineEarn
-    @ valid base: raw increases are ignored, raw decreases are spend, this pass can still earn
-    mov     r8, #0x12C            @ 300
-    mov     r10, r7               @ expectedVanilla = starting coinBin
+    mov     r8, #0x12C
+    mov     r10, r7
     cmp     r10, r8
-    movhi   r10, r8               @ expectedVanilla = min(coinBin, 300)
+    movhi   r10, r8
 
-    cmp     r10, r11              @ expectedVanilla vs pre-calc gamecoin
-    subhi   r10, r10, r11         @ historicalSpend if raw gamecoin decreased
-    movls   r10, #0               @ raw increase/equality is ignored
-    sub     r7, r7, r10           @ apply historical wallet spend once
+    cmp     r10, r11
+    subhi   r10, r10, r11
+    movls   r10, #0
+    sub     r7, r7, r10
 
-    sub     r10, r6, r11          @ genuine Home Menu earnings this calculation
-    add     r7, r7, r10           @ only genuine earnings may increase wallet
+    cmp     r6, r11
+    subhs   r10, r6, r11
+    movlo   r10, #0
+    add     r7, r7, r10
 
 afterBinLogic:
-    mov     r8, #0x12C            @ 300
-    @ rebase Home Menu to the accepted wallet so raw increases dont stay live
+    mov     r8, #0x12C
     cmp     r7, r8
     movls   r6, r7
     movhi   r6, r8
 
-    @ clamp coinBin to 30k
-    ldr     r8, =0x7530            @ 30000
+    ldr     r8, =0x7530
     cmp     r7, r8
     movhi   r7, r8
 
-    @ store back
-    ldr     r5, [r9]              @ g_coinDat addr
-    strh    r6, [r5]              @ store coinDat (16-bit)
+    ldr     r5, [r9]
+    strh    r6, [r5]
 
-    ldr     r5, [r9, #4]          @ g_coinBin addr
-    str     r7, [r5]              @ store coinBin (32-bit)
+    ldr     r5, [r9, #4]
+    str     r7, [r5]
 
-    @ write final coinDat value to struct
     strh    r6, [r4, #4]
 
+finishHomeCalculation:
+    ldr     r8, [r9, #0x24]
+    mov     r7, #0
+    mcr     p15, 0, r7, c7, c10, 5 @ publish state before clearing inFlight
+    str     r7, [r8]
     add     sp, sp, #0x7c
     pop     {r4, r5, r6, r7, r8, sb, sl, fp, pc}
 
@@ -238,29 +256,41 @@ notMax:
 .type   PLUGIN_coin_preCoinHook, %function
 PLUGIN_coin_preCoinHook:
     adr     r0, PLUGIN_coin_homePtr
-    ldr     r0, [r0]              @ ptr to homemenu store
-    @ get and push return addr
+    ldr     r0, [r0]
+    ldr     r3, [r0, #0x24]
+    mov     r0, #1
+    str     r0, [r3]
+    mcr     p15, 0, r0, c7, c10, 5 @ publish inFlight before pointer loads
+    adr     r0, PLUGIN_coin_homePtr
+    ldr     r0, [r0]
     add     r3, r0, #32
     push    {r3}
-    @ get pointer to coinEarn
-    ldr     r0, [r0, #8]         @ g_coinEarn addr
-    @cmp     r0, #0
-    @beq     skipEarn
-    @ if valid pointer, store pre-calc amount to it (homeLoaderPatch will calc and store earned amt here)
-    add      r0, r0, #4		       @ point to pre-calc holder
-    ldrh     r3, [r4, #4]          @ load pre-calc amount
-    strh     r3, [r0]
-@skipEarn:
+
+    ldr     r0, [r0, #8]
+    ldrh    r3, [r4, #4]
+    strh    r3, [r0, #4]
+    mov     r3, #0
+    str     r3, [r0, #32]
+    mov     r3, #1
+    str     r3, [r0, #52]
+
     ldr     r3, [r4, #8]
-    ldr     r0, [sp, #0x10]       @ usually 0xC, add 4 to account for pushed return
+    ldr     r0, [sp, #0x10]
     cmp     r3, r0
-    
+
     pop     {pc}
 
 .global PLUGIN_coin_historyDiagHook
 .type   PLUGIN_coin_historyDiagHook, %function
 PLUGIN_coin_historyDiagHook:
     subs    sl, lr, r0
+    mov     r3, #0
+    adr     r2, PLUGIN_coin_homePtr
+    ldr     r2, [r2]
+    ldr     r3, [r2, #0x24]
+    mov     r2, #1
+    str     r2, [r3]
+    mcr     p15, 0, r2, c7, c10, 5 @ publish inFlight before pointer loads
     mov     r3, #0
     adr     r2, PLUGIN_coin_homePtr
     ldr     r2, [r2]
@@ -278,6 +308,11 @@ PLUGIN_coin_historyDiagHook:
 .type   PLUGIN_coin_costPlus3Hook, %function
 PLUGIN_coin_costPlus3Hook:
     push    {r0, r12}
+    ldr     r0, PLUGIN_coin_homePtr
+    ldr     r12, [r0, #0x24]
+    mov     r0, #1
+    str     r0, [r12]
+    mcr     p15, 0, r0, c7, c10, 5 @ publish inFlight before pointer loads
     ldr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0, #8]
     ldr     r2, [r0, #48]
@@ -314,6 +349,9 @@ costNormalDone:
     add     r1, r12, r2
     str     r1, [r0, #36]
     str     r3, [r0, #40]
+    ldr     r12, [r0, #52]
+    orr     r12, r12, #2
+    str     r12, [r0, #52]
     pop     {r0, r12}
     b       costReturn
 
@@ -422,6 +460,9 @@ costFlatDone:
     cmp     r1, #0
     ldrne   r2, [r0, #32]
     ldrne   r3, [r0, #40]
+    ldr     r12, [r0, #52]
+    orr     r12, r12, #2
+    str     r12, [r0, #52]
     pop     {r0, r12}
 
 costReturn:

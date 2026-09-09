@@ -17,6 +17,11 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_TryAchievement(u32 index, bool conditi
     (void)PLUGIN_coin_TriggerAchievement(index);
 }
 
+PLUGIN_CODE(coin) static bool PLUGIN_coin_MeetsBalanceMilestone(u32 threshold)
+{
+    return coinsRec >= threshold && coinsBin >= threshold;
+}
+
 PLUGIN_CODE(coin) void PLUGIN_coin_CheckBalanceAchievements(void)
 {
     if (!g_coinAchievementsEnabled)
@@ -24,21 +29,28 @@ PLUGIN_CODE(coin) void PLUGIN_coin_CheckBalanceAchievements(void)
 
     u32 qualified = PLUGIN_coin_GetBlackjackQualifiedCounter();
 
-    PLUGIN_coin_TryAchievement(0u, coinsRec >= 301u && coinsTrue >= 301u);
-    PLUGIN_coin_TryAchievement(1u, coinsRec >= 500u && coinsTrue >= 500u);
-    PLUGIN_coin_TryAchievement(2u, coinsRec >= 777u);
-    PLUGIN_coin_TryAchievement(4u, coinsRec >= 999u);
+    PLUGIN_coin_TryAchievement(0u,
+        PLUGIN_coin_MeetsBalanceMilestone(301u) && coinsTrue >= 301u);
+    PLUGIN_coin_TryAchievement(1u,
+        PLUGIN_coin_MeetsBalanceMilestone(500u) && coinsTrue >= 500u);
+    PLUGIN_coin_TryAchievement(2u, PLUGIN_coin_MeetsBalanceMilestone(777u));
+    PLUGIN_coin_TryAchievement(4u, PLUGIN_coin_MeetsBalanceMilestone(999u));
     PLUGIN_coin_TryAchievement(6u,
-        coinsRec >= 1000u && coinsTrue >= 1000u && coinsEverSpent >= 300u);
-    PLUGIN_coin_TryAchievement(7u, coinsRec >= 2000u && coinsTrue >= 2000u);
+        PLUGIN_coin_MeetsBalanceMilestone(1000u) &&
+        coinsTrue >= 1000u && coinsEverSpent >= 300u);
+    PLUGIN_coin_TryAchievement(7u,
+        PLUGIN_coin_MeetsBalanceMilestone(2000u) && coinsTrue >= 2000u);
     PLUGIN_coin_TryAchievement(8u,
-        coinsRec >= 5000u && coinsTrue >= 5000u && qualified >= 1000u);
-    PLUGIN_coin_TryAchievement(9u, coinsRec >= 9999u);
-    PLUGIN_coin_TryAchievement(11u, coinsRec >= 15000u && coinsTrue >= 15000u);
-    PLUGIN_coin_TryAchievement(12u, coinsRec >= 20000u);
-    PLUGIN_coin_TryAchievement(15u, coinsRec >= 30000u);
+        PLUGIN_coin_MeetsBalanceMilestone(5000u) &&
+        coinsTrue >= 5000u && qualified >= 1000u);
+    PLUGIN_coin_TryAchievement(9u, PLUGIN_coin_MeetsBalanceMilestone(9999u));
+    PLUGIN_coin_TryAchievement(11u,
+        PLUGIN_coin_MeetsBalanceMilestone(15000u) && coinsTrue >= 15000u);
+    PLUGIN_coin_TryAchievement(12u, PLUGIN_coin_MeetsBalanceMilestone(20000u));
+    PLUGIN_coin_TryAchievement(15u, PLUGIN_coin_MeetsBalanceMilestone(30000u));
     PLUGIN_coin_TryAchievement(17u,
-        coinsRec >= 30000u && coinsTrue >= 30000u && qualified >= 30000u);
+        PLUGIN_coin_MeetsBalanceMilestone(30000u) &&
+        coinsTrue >= 30000u && qualified >= 30000u);
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_CheckWalkAchievements(void)
@@ -64,7 +76,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_CheckSpendAchievements(void)
         return;
 
     PLUGIN_coin_TryAchievement(6u,
-        coinsRec >= 1000u && coinsTrue >= 1000u && coinsEverSpent >= 300u);
+        PLUGIN_coin_MeetsBalanceMilestone(1000u) &&
+        coinsTrue >= 1000u && coinsEverSpent >= 300u);
     PLUGIN_coin_TryAchievement(13u, coinsEverSpent >= 10000u);
 }
 
@@ -75,9 +88,11 @@ PLUGIN_CODE(coin) void PLUGIN_coin_CheckGambleAchievements(void)
 
     u32 qualified = PLUGIN_coin_GetBlackjackQualifiedCounter();
     PLUGIN_coin_TryAchievement(8u,
-        coinsRec >= 5000u && coinsTrue >= 5000u && qualified >= 1000u);
+        PLUGIN_coin_MeetsBalanceMilestone(5000u) &&
+        coinsTrue >= 5000u && qualified >= 1000u);
     PLUGIN_coin_TryAchievement(17u,
-        coinsRec >= 30000u && coinsTrue >= 30000u && qualified >= 30000u);
+        PLUGIN_coin_MeetsBalanceMilestone(30000u) &&
+        coinsTrue >= 30000u && qualified >= 30000u);
 }
 #elif defined(PLAYCOIN_SECRETS_DATA)
 PLUGIN_CODE(coin) static void PLUGIN_coin_DecodeAchievementString(u16 *text, u32 capacity)
@@ -2086,7 +2101,9 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_FirstPendingAchievement(u32 mask)
     return COIN_ACHIEVEMENT_COUNT;
 }
 
-PLUGIN_CODE(coin) static void PLUGIN_coin_HardNotificationTick(u64 delta)
+PLUGIN_CODE(coin) static void PLUGIN_coin_HardNotificationTick(u64 delta);
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_HardNotificationTickImpl(u64 delta)
 {
     (void)delta;
 
@@ -2183,7 +2200,14 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HardNotificationTick(u64 delta)
     (void)COIN_BLUR__AddTickFunc(PLUGIN_coin_HardNotificationTick, COIN_NOTIFICATION_TICK_NS);
 }
 
-PLUGIN_CODE(coin) Result PLUGIN_coin_TriggerAchievement(u32 achievementIndex)
+PLUGIN_CODE(coin) static void PLUGIN_coin_HardNotificationTick(u64 delta)
+{
+    COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
+    PLUGIN_coin_HardNotificationTickImpl(delta);
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
+}
+
+PLUGIN_CODE(coin) static Result PLUGIN_coin_TriggerAchievementImpl(u32 achievementIndex)
 {
     if (achievementIndex >= COIN_ACHIEVEMENT_COUNT)
         return (Result)-26;
@@ -2230,5 +2254,13 @@ PLUGIN_CODE(coin) Result PLUGIN_coin_TriggerAchievement(u32 achievementIndex)
     }
 
     return 0;
+}
+
+PLUGIN_CODE(coin) Result PLUGIN_coin_TriggerAchievement(u32 achievementIndex)
+{
+    COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
+    Result rc = PLUGIN_coin_TriggerAchievementImpl(achievementIndex);
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
+    return rc;
 }
 #endif

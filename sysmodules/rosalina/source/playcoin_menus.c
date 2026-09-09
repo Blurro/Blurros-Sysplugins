@@ -79,14 +79,17 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawEditor(
 #elif defined(PLAYCOIN_MENUS_MAIN)
 PLUGIN_CODE(coin) void PLUGIN_coin_EditPlayCoins(void)
 {
+    COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
+
     // apply the edited balance
     PLUGIN_coin_UpdatePlayCoins();
 
     u16 playCoins = coinsBin > coinsSpent ? (u16)(coinsBin - coinsSpent) : 0;
     Result res = 0;
-    u32 trueCoinDisplay = coinsTrue + coinsEarned; // coinstrue (aka coins ever earned) doesnt decrease
-    u32 recommendedDisplay = coinsRec + coinsEarned > coinsSpent ?
-        coinsRec + coinsEarned - coinsSpent : 0;
+    u32 pendingEarned = PLUGIN_coin_PendingEarned();
+    u32 trueCoinDisplay = coinsTrue + pendingEarned; // coinstrue (aka coins ever earned) doesnt decrease
+    u32 recommendedDisplay = coinsRec + pendingEarned > coinsSpent ?
+        coinsRec + pendingEarned - coinsSpent : 0;
     bool previousWarning = playCoins > trueCoinDisplay;
     bool previousRecommended = playCoins != recommendedDisplay;
     u32 observedDiagSerial = g_coinHardDiagCompletedSerial;
@@ -104,7 +107,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_EditPlayCoins(void)
         }
         else if (pressed & KEY_B)
         {
-            return;
+            break;
         }
         else
         {
@@ -177,6 +180,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_EditPlayCoins(void)
             );
         }
     } while (!COIN_HOST__menuShouldExit);
+
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
 }
 #elif defined(PLAYCOIN_MENUS_DEBUG_AND_ACHIEVEMENTS)
 PLUGIN_CODE(coin) static void PLUGIN_coin_ClearDebugBucketLine(u32 y)
@@ -1197,9 +1202,15 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
                 else
                 {
                     bool progressiveChanged = !g_coinProgressiveCostEnabled;
-                    g_coinAchievementsEnabled = true;
-                    PLUGIN_coin_SetProgressiveCostEnabled(true);
-                    PLUGIN_coin_RedrawOptionValues(true, progressiveChanged, selected);
+                    if (PLUGIN_coin_SetProgressiveCostEnabled(true))
+                    {
+                        g_coinAchievementsEnabled = true;
+                        PLUGIN_coin_RedrawOptionValues(true, progressiveChanged, selected);
+                    }
+                    else
+                    {
+                        PLUGIN_coin_DrawOptions(selected);
+                    }
                 }
             }
             else
@@ -1208,15 +1219,17 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
                 {
                     if (PLUGIN_coin_ConfirmProgressiveCostAction())
                     {
-                        g_coinAchievementsEnabled = false;
-                        PLUGIN_coin_SetProgressiveCostEnabled(false);
+                        if (PLUGIN_coin_SetProgressiveCostEnabled(false))
+                            g_coinAchievementsEnabled = false;
                     }
                     PLUGIN_coin_DrawOptions(selected);
                 }
                 else
                 {
-                    PLUGIN_coin_SetProgressiveCostEnabled(true);
-                    PLUGIN_coin_RedrawOptionValues(false, true, selected);
+                    if (PLUGIN_coin_SetProgressiveCostEnabled(true))
+                        PLUGIN_coin_RedrawOptionValues(false, true, selected);
+                    else
+                        PLUGIN_coin_DrawOptions(selected);
                 }
             }
         }

@@ -43,6 +43,7 @@ extern u16 PLUGIN_coin_dat;
 extern u32 PLUGIN_coin_bin[4];
 extern u16 PLUGIN_coin_change[4];
 extern u32 PLUGIN_coin_homePtr;
+extern u32 PLUGIN_coin_handoffControl;
 extern u32 PLUGIN_coin_homeUIReturn;
 extern u32 PLUGIN_coin_loaderReturn;
 extern void PLUGIN_coin_LoaderPatchCodeHook(void);
@@ -775,6 +776,9 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     u16 *mappedDat = (u16*)((u32)&PLUGIN_coin_dat + stateDelta);
     u32 *mappedBin = (u32*)((u32)PLUGIN_coin_bin + stateDelta);
     u16 *mappedChange = (u16*)((u32)PLUGIN_coin_change + stateDelta);
+    u32 *mappedHandoffControl =
+        (u32*)((u32)&PLUGIN_coin_handoffControl + stateDelta);
+    *mappedHandoffControl = 0;
     if (!PLUGIN_coin_InitializeHomeMenuState(mappedDat, mappedBin, mappedChange, homePointer))
     {
         PLUGIN_coin_UnmapOwnPage(stateMapBase);
@@ -798,8 +802,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
         0x00000064u,
         0xE51FF004u,
         PLUGIN_coin_Phys(PLUGIN_coin_preCoinHook),
-        NOP,
-        NOP,
+        0xEA000001u,
+        PLUGIN_coin_Phys(&PLUGIN_coin_handoffControl),
         NOP,
         0x1A00001Au,
     };

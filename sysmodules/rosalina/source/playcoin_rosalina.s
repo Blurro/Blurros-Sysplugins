@@ -33,6 +33,8 @@ PLUGIN_coin_stepDiagnostics:
     .word 0
     .word 0
     .word 0
+.global g_coinProgressiveEarnedThisCalc
+g_coinProgressiveEarnedThisCalc:
     .word 0 @ progressive earned this calc
 
 .global g_coinProgressiveToday
@@ -41,3 +43,9 @@ g_coinProgressiveToday:
     .word 0 @ progressive step remainder
     .word 0 @ flat step remainder
     .word 0 @ split progression active
+.global g_coinCalculationValidity
+g_coinCalculationValidity:
+    .word 0 @ calculation validity
+.global g_coinInvalidBasePending
+g_coinInvalidBasePending:
+    .word 0 @ invalid base pending

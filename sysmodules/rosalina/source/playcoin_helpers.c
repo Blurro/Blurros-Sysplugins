@@ -147,8 +147,14 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_RecordBlackjackDeposit(
     u32 destroyedFeeCoins
 )
 {
+    COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
+
     if (g_coinsFailed || !g_patchedHome || destroyedFeeCoins > depositedCoins)
-        return false;
+        goto rejected;
+
+    Handle homeProcess = 0;
+    if (!PLUGIN_coin_LockHomeState(&homeProcess))
+        goto rejected;
 
     // only the walking-backed overlap counts toward tracked spending/progress
     u32 trackedCoins = depositedCoins < coinsRec ? depositedCoins : coinsRec;
@@ -169,26 +175,40 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_RecordBlackjackDeposit(
     PLUGIN_coin_ClampTrackedAccounting();
     if (trackedCoins)
         g_coinExtendedDirty = true;
-    return true;
+    COIN_HOST__svcFlushEntireDataCache();
+    bool accepted = PLUGIN_coin_UnlockHomeState(homeProcess);
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
+    return accepted;
+
+rejected:
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
+    return false;
 }
 
 // returns how many whole coins actually qualified for secrets
 PLUGIN_CODE(coin) u32 PLUGIN_coin_RecordBlackjackQualified(u32 qualifiedCoins)
 {
+    COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
+
     if (g_coinsFailed || !g_patchedHome || !qualifiedCoins)
-        return 0;
+        goto rejected;
 
     u32 deposited = PLUGIN_coin_GetBlackjackDepositedCounter();
     u32 qualified = PLUGIN_coin_GetBlackjackQualifiedCounter();
     u32 remaining = deposited - qualified;
     u32 credited = qualifiedCoins < remaining ? qualifiedCoins : remaining;
     if (!credited)
-        return 0;
+        goto rejected;
 
     PLUGIN_coin_SetBlackjackCounters(deposited, qualified + credited);
     g_coinExtendedDirty = true;
     g_coinGambleEvent = true;
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
     return credited;
+
+rejected:
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
+    return 0;
 }
 
 PLUGIN_CODE(coin) bool PLUGIN_coin_RecordBlackjackWithdrawal(
@@ -196,29 +216,47 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_RecordBlackjackWithdrawal(
     u32 netSurplusCoins
 )
 {
-    if (g_coinsFailed || !g_patchedHome || netSurplusCoins > receivedCoins)
-        return false;
+    COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
 
+    if (g_coinsFailed || !g_patchedHome || netSurplusCoins > receivedCoins)
+        goto rejected;
+
+    Handle homeProcess = 0;
+    if (!PLUGIN_coin_LockHomeState(&homeProcess))
+        goto rejected;
+
+    bool accepted = false;
     u32 newSurplus = PLUGIN_coin_SaturatingAdd(
         PLUGIN_coin_GetBlackjackSurplusCounter(),
         netSurplusCoins
     );
     u32 capacity = PLUGIN_coin_SaturatingAdd(coinsTrue, newSurplus);
     if (coinsEverSpent > capacity)
-        return false;
+        goto done;
 
     u32 available = capacity - coinsEverSpent;
     if (coinsRec > available || receivedCoins > available - coinsRec ||
         coinsRec > 30000u || receivedCoins > 30000u - coinsRec)
     {
-        return false;
+        goto done;
     }
 
     g_coinExtendedData[COIN_EXT_BLACKJACK_SURPLUS_WORD] = newSurplus;
     coinsRec += receivedCoins;
     g_coinExtendedDirty = true;
     g_coinBalanceEvent = true;
-    return true;
+    COIN_HOST__svcFlushEntireDataCache();
+    accepted = true;
+
+done:
+    if (!PLUGIN_coin_UnlockHomeState(homeProcess))
+        accepted = false;
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
+    return accepted;
+
+rejected:
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
+    return false;
 }
 
 PLUGIN_CODE(coin) static u16 PLUGIN_coin_GetHistoryDay(u32 index)
