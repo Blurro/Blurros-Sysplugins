@@ -7,7 +7,7 @@
 extern void *pluginTable_coin[];
 extern u16 g_coinDat;
 extern u32 g_coinData[4];
-extern u16 g_coinChange[3];
+extern u16 g_coinChange[4];
 extern u32 g_coinOffset;
 extern const char g_coinMenuProcessName[];
 

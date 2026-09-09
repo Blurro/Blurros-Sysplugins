@@ -262,4 +262,9 @@ for source_name, output_name, version, expected_count in raw_items:
     print(f"Wrapped {source_name}: v{version}, {len(raw)} -> {len(packed)} bytes raw")
 PY
 
+# Rebuild both HOME assembly halves after overlay updates.
+rm -f -- \
+    "$SCRIPT_DIR/sysmodules/loader/build/playcoin_loader.o" \
+    "$SCRIPT_DIR/sysmodules/rosalina/build/playcoin_rosalina.o"
+
 printf '\nPre-build complete. Run ./makeplugin.sh next.\n'

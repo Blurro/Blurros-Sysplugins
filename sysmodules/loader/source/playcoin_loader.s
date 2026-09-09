@@ -278,8 +278,7 @@ PLUGIN_coin_historyDiagHook:
 .type   PLUGIN_coin_costPlus3Hook, %function
 PLUGIN_coin_costPlus3Hook:
     push    {r0, r12}
-    ldr     r0, =PLUGIN_coin_homePtr
-    ldr     r0, [r0]
+    ldr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0, #8]
     ldr     r2, [r0, #48]
     cmp     r2, #0
@@ -309,8 +308,7 @@ costNormalLoop:
     b       costNormalLoop
 
 costNormalDone:
-    ldr     r0, =PLUGIN_coin_homePtr
-    ldr     r0, [r0]
+    ldr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0, #8]
     str     r2, [r0, #32]
     add     r1, r12, r2
@@ -349,8 +347,7 @@ costStartProgressiveLoop:
     b       costStartProgressiveLoop
 
 costStartProgressiveDone:
-    ldr     r0, =PLUGIN_coin_homePtr
-    ldr     r0, [r0]
+    ldr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0, #8]
     str     r2, [r0, #32]
     add     r1, r12, r2
@@ -400,8 +397,7 @@ costSplitProgressiveLoop:
     b       costSplitProgressiveLoop
 
 costSplitProgressiveDone:
-    ldr     r0, =PLUGIN_coin_homePtr
-    ldr     r0, [r0]
+    ldr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0, #8]
     str     r2, [r0, #32]
     add     r1, r12, r2
@@ -419,8 +415,7 @@ costFlatLoop:
     b       costFlatLoop
 
 costFlatDone:
-    ldr     r0, =PLUGIN_coin_homePtr
-    ldr     r0, [r0]
+    ldr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0, #8]
     str     r3, [r0, #44]
     ldrh    r1, [r0, #6]
@@ -430,8 +425,7 @@ costFlatDone:
     pop     {r0, r12}
 
 costReturn:
-    ldr     r0, =PLUGIN_coin_homePtr
-    ldr     r0, [r0]
+    ldr     r0, PLUGIN_coin_homePtr
     add     r0, r0, #0x100
     add     r0, r0, #0x84
     mov     pc, r0

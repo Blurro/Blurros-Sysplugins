@@ -41,7 +41,7 @@ extern void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize);
 
 extern u16 PLUGIN_coin_dat;
 extern u32 PLUGIN_coin_bin[4];
-extern u16 PLUGIN_coin_change[3];
+extern u16 PLUGIN_coin_change[4];
 extern u32 PLUGIN_coin_homePtr;
 extern u32 PLUGIN_coin_homeUIReturn;
 extern u32 PLUGIN_coin_loaderReturn;
