@@ -77,7 +77,7 @@ typedef struct
 typedef struct
 {
     u32 version;
-    u32 achievementsEnabled;
+    u32 flags;
 } CoinMenuSettings;
 
 typedef char CoinAchievementSizeCheck[(sizeof(CoinAchievement) == 1092u) ? 1 : -1];
@@ -253,6 +253,10 @@ PLUGIN_RODATA(coin) static const char g_coinSetCoinsItem[] = "Set the number of 
 PLUGIN_RODATA(coin) static const char g_coinOptionsItem[] = "Options...";
 PLUGIN_RODATA(coin) static const char g_coinDisableAchievementsItem[] = "Disable Achievements";
 PLUGIN_RODATA(coin) static const char g_coinEnableAchievementsItem[] = "Enable Achievements";
+PLUGIN_RODATA(coin) static const char g_coinDisableProgressiveCostItem[] =
+    "Disable Progressive Coin Cost";
+PLUGIN_RODATA(coin) static const char g_coinEnableProgressiveCostItem[] =
+    "Enable Progressive Coin Cost";
 PLUGIN_RODATA(coin) static const char g_coinTierEasy[] = "Easy";
 PLUGIN_RODATA(coin) static const char g_coinTierMedium[] = "Medium";
 PLUGIN_RODATA(coin) static const char g_coinTierHard[] = "Hard";
@@ -274,6 +278,18 @@ PLUGIN_RODATA(coin) static const char g_coinAchievementDeleteItem[] = "Delete fr
 PLUGIN_RODATA(coin) static const char g_coinConfirmTitle[] = "Are you sure?";
 PLUGIN_RODATA(coin) static const char g_coinConfirmNo[] = "No";
 PLUGIN_RODATA(coin) static const char g_coinConfirmYes[] = "Yes";
+PLUGIN_RODATA(coin) static const char g_coinProgressiveCostExplain[] =
+    "In PlayCoinz, each coin after the 10th coin\n"
+    "progressively costs an extra +3 steps to earn.\n"
+    "This means coin 11 takes 103 steps, coin 14\n"
+    "takes 112 steps, and so on.\n"
+    "Disabling returns to the stock 100 steps per\n"
+    "coin system.";
+PLUGIN_RODATA(coin) static const char g_coinProgressiveCostWarning[] =
+    "Warning: This will desync from your tracked\n"
+    "'recommended' coin balance, and disable\n"
+    "achievements.\n"
+    "You can turn both back on at any time.";
 PLUGIN_RODATA(coin) static const char g_coinResultAlreadyExists[] =
     "This already exists in your notifications!";
 PLUGIN_RODATA(coin) static const char g_coinResultDone[] = "Done!";
@@ -336,7 +352,10 @@ PLUGIN_RODATA(coin) static const char g_clearResultLine[] = "                   
 #define COIN_ACHIEVEMENT_MAGIC         0x56484341u
 #define COIN_ACHIEVEMENT_COUNT         18u
 #define COIN_ACHIEVEMENT_MASK          0x0003FFFFu
-#define COIN_SETTINGS_VERSION           1u
+#define COIN_SETTINGS_VERSION           2u
+#define COIN_SETTINGS_ACHIEVEMENTS      (1u << 0)
+#define COIN_SETTINGS_PROGRESSIVE_COST  (1u << 1)
+#define COIN_SETTINGS_VALID_MASK        (COIN_SETTINGS_ACHIEVEMENTS | COIN_SETTINGS_PROGRESSIVE_COST)
 #define COIN_FILE_BASE_SIZE             0x20u
 #define COIN_FILE_EXTENSION_OFFSET      0x20u
 #define COIN_FILE_EXTENSION_WORDS       7u
@@ -432,7 +451,8 @@ PLUGIN_RODATA(coin) static const u32 g_gameCoinArchivePath[3] = {
 // coins stuff
 extern u16 g_coinDat;
 extern u32 g_coinData[4];
-extern u16 g_coinChange[3];
+extern u16 g_coinChange[4];
+extern u32 g_coinProgressiveToday;
 extern volatile CoinStepDiagnostics PLUGIN_coin_stepDiagnostics;
 PLUGIN_DATA(coin) u32 g_coinOffset = 0;
 PLUGIN_DATA(coin) static u32 g_lastCoins = 0;
@@ -457,6 +477,7 @@ PLUGIN_BSS(coin) static bool g_coinAchievementSavePresent;
 PLUGIN_BSS(coin) static bool g_coinAchievementSaveValid;
 PLUGIN_BSS(coin) static u32 g_coinAchievementSavedMask;
 PLUGIN_BSS(coin) static bool g_coinAchievementsEnabled;
+PLUGIN_BSS(coin) static bool g_coinProgressiveCostEnabled;
 PLUGIN_BSS(coin) static u32 g_coinExtendedData[COIN_FILE_EXTENSION_WORDS];
 PLUGIN_BSS(coin) static bool g_coinExtendedDirty;
 PLUGIN_BSS(coin) static bool g_coinBalanceEvent;
@@ -486,26 +507,55 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SaveMenuSettings(void)
 {
     CoinMenuSettings settings;
     settings.version = COIN_SETTINGS_VERSION;
-    settings.achievementsEnabled = g_coinAchievementsEnabled ? 1u : 0u;
+    settings.flags =
+        (g_coinAchievementsEnabled ? COIN_SETTINGS_ACHIEVEMENTS : 0u) |
+        (g_coinProgressiveCostEnabled ? COIN_SETTINGS_PROGRESSIVE_COST : 0u);
     (void)COIN_MENU__SaveData(COIN_PLUGIN_ID, &settings, sizeof(settings));
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_LoadMenuSettings(void)
 {
     g_coinAchievementsEnabled = true;
+    g_coinProgressiveCostEnabled = true;
 
     CoinMenuSettings settings;
-    if (COIN_MENU__LoadData(COIN_PLUGIN_ID, &settings, sizeof(settings)) &&
-        settings.version == COIN_SETTINGS_VERSION &&
-        settings.achievementsEnabled <= 1u)
+    if (COIN_MENU__LoadData(COIN_PLUGIN_ID, &settings, sizeof(settings)))
     {
-        g_coinAchievementsEnabled = settings.achievementsEnabled != 0;
+        if (settings.version == 1u && settings.flags <= 1u)
+        {
+            g_coinAchievementsEnabled = settings.flags != 0;
+        }
+        else if (settings.version == COIN_SETTINGS_VERSION &&
+                 !(settings.flags & ~COIN_SETTINGS_VALID_MASK))
+        {
+            g_coinAchievementsEnabled =
+                (settings.flags & COIN_SETTINGS_ACHIEVEMENTS) != 0;
+            g_coinProgressiveCostEnabled =
+                (settings.flags & COIN_SETTINGS_PROGRESSIVE_COST) != 0;
+        }
     }
+
+    g_coinChange[3] = g_coinProgressiveCostEnabled ? 1u : 0u;
 }
 
 #define PLAYCOIN_HELPERS_EARLY
 #include "playcoin_helpers.c"
 #undef PLAYCOIN_HELPERS_EARLY
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_SetProgressiveCostEnabled(bool enabled)
+{
+    u32 today = PLUGIN_coin_GetTodayWalked() + coinsEarned;
+    g_coinProgressiveToday = today > 0xFFFFu ? 0xFFFFu : today;
+    g_coinProgressiveCostEnabled = enabled;
+    g_coinChange[3] = enabled ? 1u : 0u;
+    COIN_HOST__svcFlushEntireDataCache();
+}
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_SyncProgressiveToday(void)
+{
+    g_coinProgressiveToday = PLUGIN_coin_GetTodayWalked();
+    COIN_HOST__svcFlushEntireDataCache();
+}
 
 #define PLAYCOIN_SECRETS_CHECKS
 #include "playcoin_secrets.c"
@@ -524,6 +574,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
 
     PLUGIN_coin_UpdateDayHistory();
     PLUGIN_coin_AddTodayWalked(coinsEarned);
+    PLUGIN_coin_SyncProgressiveToday();
 
     if (coinsEarned > 0 || !g_patchedHome)
     {
@@ -726,7 +777,10 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SetupCoins(void)
         }
 
         if (!g_coinsFailed)
+        {
             PLUGIN_coin_UpdateDayHistory();
+            PLUGIN_coin_SyncProgressiveToday();
+        }
         if (R_FAILED(COIN_HOST__FSFILE_Close(file)))
             g_coinsFailed = true;
 

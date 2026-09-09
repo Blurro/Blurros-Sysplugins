@@ -23,6 +23,7 @@ PLUGIN_coin_change:
     .hword 0
     .hword 0 @ coinsSpent, for coin setter page
     .hword 0 @ coinEarn pre-calc coins
+    .hword 1 @ progressive coin cost enabled
 
 .balign 4
 .global PLUGIN_coin_stepDiagnostics
@@ -33,6 +34,11 @@ PLUGIN_coin_stepDiagnostics:
     .word 0
     .word 0
     .word 0
+    .word 0 @ progressive earned this calc
+    .word 0 @ progressive tracked coins today
+    .word 0 @ progressive step remainder
+    .word 0 @ flat step remainder
+    .word 0 @ split progression active
 @ -------- end of rosalina mirroring
 
 @ below is this side only
@@ -73,9 +79,32 @@ PLUGIN_coin_homeLoaderPatch:
     sub     r7, r6, r11           @ this is coins - (pre-calc coins), coins is always same or higher
     sub     r8, r8, #4            @ point back to coinEarn
 
+    ldr     r10, [r8, #48]
+    cmp     r10, #0
+    ldrne   r7, [r8, #32]         @ split wallet mode still tracks progressive earnings
+
     ldrh    r5, [r8]
     add     r7, r5, r7
-    strh    r7, [r8]              @ store increased coinEarn (post-calc profits) 
+    strh    r7, [r8]              @ store increased coinEarn (post-calc profits)
+
+    cmp     r10, #0
+    beq     afterSplitProgression
+    ldr     r7, [r8, #36]
+    strh    r7, [r4, #6]
+    str     r7, [r8, #28]
+    ldr     r5, [r8, #24]
+    ldr     r7, [r8, #40]
+    cmp     r5, r7
+    subhs   r5, r5, r7
+    movlo   r5, #0
+    str     r5, [r8, #20]
+    ldrh    r7, [r8, #6]
+    cmp     r7, #0
+    beq     afterSplitProgression
+    str     r5, [r4, #12]
+    mov     r7, #0
+    str     r7, [r8, #48]
+afterSplitProgression:
 
     @ coinsSpent calc
     mov     r5, #0                @ coinsSpent = 0
@@ -248,28 +277,160 @@ PLUGIN_coin_historyDiagHook:
 .global PLUGIN_coin_costPlus3Hook
 .type   PLUGIN_coin_costPlus3Hook, %function
 PLUGIN_coin_costPlus3Hook:
-    mov     r3, r0                  @ remaining steps
-    mov     r2, #0                  @ coins earned this calc
-    mov     r1, #100                @ first 10 coins cost 100 steps
+    push    {r0, r12}
+    ldr     r0, =PLUGIN_coin_homePtr
+    ldr     r0, [r0]
+    ldr     r0, [r0, #8]
+    ldr     r2, [r0, #48]
+    cmp     r2, #0
+    bne     costSplitActive
+    ldrh    r1, [r0, #6]
+    cmp     r1, #0
+    beq     costStartSplit
 
+    ldr     r3, [sp]
+    ldr     r12, [sp, #4]
+    mov     r2, #0
+    mov     r1, #100
     cmp     r12, #10
-    blt     costPlus3Loop
+    blt     costNormalLoop
     sub     r0, r12, #9
     add     r0, r0, r0, lsl #1
-    add     r1, r1, r0              @ coin 11 is 103, then +3 each coin
+    add     r1, r1, r0
 
-costPlus3Loop:
+costNormalLoop:
     cmp     r3, r1
-    blo     costPlus3Done
+    blo     costNormalDone
     sub     r3, r3, r1
     add     r2, r2, #1
     add     r0, r12, r2
     cmp     r0, #10
     addge   r1, r1, #3
-    b       costPlus3Loop
+    b       costNormalLoop
 
-costPlus3Done:
-    adr     r0, PLUGIN_coin_homePtr
+costNormalDone:
+    ldr     r0, =PLUGIN_coin_homePtr
+    ldr     r0, [r0]
+    ldr     r0, [r0, #8]
+    str     r2, [r0, #32]
+    add     r1, r12, r2
+    str     r1, [r0, #36]
+    str     r3, [r0, #40]
+    pop     {r0, r12}
+    b       costReturn
+
+costStartSplit:
+    ldr     r3, [sp]
+    ldr     r1, [sp, #4]
+    ldr     r12, [r0, #36]
+    cmp     r1, r12
+    bhs     costStartSplitNoReset
+    mov     r12, #0
+    str     r12, [r0, #36]
+    str     r12, [r0, #40]
+    str     r12, [r0, #44]
+costStartSplitNoReset:
+    mov     r2, #0
+    mov     r1, #100
+    cmp     r12, #10
+    blt     costStartProgressiveLoop
+    sub     r0, r12, #9
+    add     r0, r0, r0, lsl #1
+    add     r1, r1, r0
+
+costStartProgressiveLoop:
+    cmp     r3, r1
+    blo     costStartProgressiveDone
+    sub     r3, r3, r1
+    add     r2, r2, #1
+    add     r0, r12, r2
+    cmp     r0, #10
+    addge   r1, r1, #3
+    b       costStartProgressiveLoop
+
+costStartProgressiveDone:
+    ldr     r0, =PLUGIN_coin_homePtr
+    ldr     r0, [r0]
+    ldr     r0, [r0, #8]
+    str     r2, [r0, #32]
+    add     r1, r12, r2
+    str     r1, [r0, #36]
+    str     r3, [r0, #40]
+    mov     r1, #1
+    str     r1, [r0, #48]
+    ldr     r3, [sp]
+    mov     r2, #0
+    mov     r1, #100
+    b       costFlatLoop
+
+costSplitActive:
+    ldr     r1, [r0, #36]
+    ldr     r12, [sp, #4]
+    cmp     r12, r1
+    bhs     costSplitNoReset
+    mov     r1, #0
+    str     r1, [r0, #36]
+    str     r1, [r0, #40]
+    str     r1, [r0, #44]
+
+costSplitNoReset:
+    ldr     r12, [r0, #36]
+    ldr     r1, [r0, #44]
+    ldr     r3, [sp]
+    cmp     r3, r1
+    subhs   r3, r3, r1
+    ldr     r1, [r0, #40]
+    add     r3, r3, r1
+    mov     r2, #0
+    mov     r1, #100
+    cmp     r12, #10
+    blt     costSplitProgressiveLoop
+    sub     r0, r12, #9
+    add     r0, r0, r0, lsl #1
+    add     r1, r1, r0
+
+costSplitProgressiveLoop:
+    cmp     r3, r1
+    blo     costSplitProgressiveDone
+    sub     r3, r3, r1
+    add     r2, r2, #1
+    add     r0, r12, r2
+    cmp     r0, #10
+    addge   r1, r1, #3
+    b       costSplitProgressiveLoop
+
+costSplitProgressiveDone:
+    ldr     r0, =PLUGIN_coin_homePtr
+    ldr     r0, [r0]
+    ldr     r0, [r0, #8]
+    str     r2, [r0, #32]
+    add     r1, r12, r2
+    str     r1, [r0, #36]
+    str     r3, [r0, #40]
+    ldr     r3, [sp]
+    mov     r2, #0
+    mov     r1, #100
+
+costFlatLoop:
+    cmp     r3, r1
+    blo     costFlatDone
+    sub     r3, r3, r1
+    add     r2, r2, #1
+    b       costFlatLoop
+
+costFlatDone:
+    ldr     r0, =PLUGIN_coin_homePtr
+    ldr     r0, [r0]
+    ldr     r0, [r0, #8]
+    str     r3, [r0, #44]
+    ldrh    r1, [r0, #6]
+    cmp     r1, #0
+    ldrne   r2, [r0, #32]
+    ldrne   r3, [r0, #40]
+    pop     {r0, r12}
+
+costReturn:
+    ldr     r0, =PLUGIN_coin_homePtr
     ldr     r0, [r0]
     add     r0, r0, #0x100
     add     r0, r0, #0x84

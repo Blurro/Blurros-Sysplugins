@@ -22,6 +22,7 @@ g_coinChange:
     .hword 0
     .hword 0 @ coinsSpent, for coin setter page
     .hword 0 @ coinEarn pre-calc coins
+    .hword 1 @ progressive coin cost enabled
 
 .balign 4
 .global PLUGIN_coin_stepDiagnostics
@@ -32,3 +33,11 @@ PLUGIN_coin_stepDiagnostics:
     .word 0
     .word 0
     .word 0
+    .word 0 @ progressive earned this calc
+
+.global g_coinProgressiveToday
+g_coinProgressiveToday:
+    .word 0
+    .word 0 @ progressive step remainder
+    .word 0 @ flat step remainder
+    .word 0 @ split progression active

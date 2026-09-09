@@ -369,7 +369,8 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawSimpleMenuItem(
 PLUGIN_CODE(coin) static bool PLUGIN_coin_HasEarnedAchievements(void)
 {
     u32 earnedMask = 0;
-    return R_SUCCEEDED(PLUGIN_coin_ReadAchievementEarnedMask(&earnedMask)) &&
+    return g_coinAchievementsEnabled &&
+        R_SUCCEEDED(PLUGIN_coin_ReadAchievementEarnedMask(&earnedMask)) &&
         (earnedMask & COIN_ACHIEVEMENT_MASK) != 0;
 }
 
@@ -809,6 +810,63 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ConfirmAchievementAction(void)
     return false;
 }
 
+PLUGIN_CODE(coin) static void PLUGIN_coin_DrawProgressiveCostConfirm(u32 selected)
+{
+    COIN_HOST__Draw_Lock();
+    COIN_HOST__Draw_ClearFramebuffer();
+    PLUGIN_coin_DrawFrame(g_coinConfirmTitle);
+    COIN_HOST__Draw_DrawString(20, 42, COLOR_WHITE, g_coinProgressiveCostExplain);
+    COIN_HOST__Draw_DrawString(20, 117, COLOR_ORANGE, g_coinProgressiveCostWarning);
+    PLUGIN_coin_DrawConfirmItem(173u, selected == 0u, g_coinConfirmNo);
+    PLUGIN_coin_DrawConfirmItem(188u, selected == 1u, g_coinConfirmYes);
+    COIN_HOST__Draw_FlushFramebuffer();
+    COIN_HOST__Draw_Unlock();
+}
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawProgressiveCostConfirmSelection(
+    u32 oldSelected,
+    u32 selected
+)
+{
+    u32 oldY = oldSelected == 0u ? 173u : 188u;
+    u32 newY = selected == 0u ? 173u : 188u;
+    const char *oldText = oldSelected == 0u ? g_coinConfirmNo : g_coinConfirmYes;
+    const char *newText = selected == 0u ? g_coinConfirmNo : g_coinConfirmYes;
+
+    COIN_HOST__Draw_Lock();
+    COIN_HOST__Draw_DrawString(10, oldY, COLOR_BLACK, g_coinMenuClearRow);
+    COIN_HOST__Draw_DrawString(10, newY, COLOR_BLACK, g_coinMenuClearRow);
+    PLUGIN_coin_DrawConfirmItem(oldY, false, oldText);
+    PLUGIN_coin_DrawConfirmItem(newY, true, newText);
+    COIN_HOST__Draw_FlushFramebuffer();
+    COIN_HOST__Draw_Unlock();
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ConfirmProgressiveCostAction(void)
+{
+    u32 selected = 0;
+    PLUGIN_coin_DrawProgressiveCostConfirm(selected);
+
+    do
+    {
+        u32 pressed = COIN_HOST__waitInputWithTimeout(50);
+        if (pressed & KEY_B)
+            return false;
+        if (pressed & (KEY_DUP | KEY_DDOWN))
+        {
+            u32 oldSelected = selected;
+            selected = selected ? 0u : 1u;
+            PLUGIN_coin_RedrawProgressiveCostConfirmSelection(oldSelected, selected);
+        }
+        else if (pressed & KEY_A)
+        {
+            return selected == 1u;
+        }
+    } while (!COIN_HOST__menuShouldExit);
+
+    return false;
+}
+
 PLUGIN_CODE(coin) static void PLUGIN_coin_DrawAchievementActionResult(
     const char *message,
     bool error,
@@ -1007,41 +1065,160 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenAchievements(void)
     COIN_MENU__TempFree(scratchBase, 0x1000u);
 }
 
-PLUGIN_CODE(coin) static void PLUGIN_coin_DrawOptions(void)
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_OptionsY(u32 selected)
+{
+    return 45u + selected * 15u;
+}
+
+PLUGIN_CODE(coin) static const char *PLUGIN_coin_OptionTitle(u32 selected)
+{
+    if (selected == 0u)
+    {
+        return g_coinAchievementsEnabled ? g_coinDisableAchievementsItem :
+            g_coinEnableAchievementsItem;
+    }
+
+    return g_coinProgressiveCostEnabled ? g_coinDisableProgressiveCostItem :
+        g_coinEnableProgressiveCostItem;
+}
+
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_OptionColor(u32 selected)
+{
+    if (selected == 0u)
+        return g_coinAchievementsEnabled ? COLOR_WHITE : COLOR_GREEN;
+    return g_coinProgressiveCostEnabled ? COLOR_WHITE : COLOR_GREEN;
+}
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_DrawOptions(u32 selected)
 {
     COIN_HOST__Draw_Lock();
     COIN_HOST__Draw_ClearFramebuffer();
     PLUGIN_coin_DrawFrame(g_coinOptionsPageTitle);
-    PLUGIN_coin_DrawSimpleMenuItem(45u, true,
-        g_coinAchievementsEnabled ? g_coinDisableAchievementsItem :
-            g_coinEnableAchievementsItem,
-        g_coinAchievementsEnabled ? COLOR_WHITE : COLOR_GREEN);
+    for (u32 i = 0; i < 2u; i++)
+    {
+        PLUGIN_coin_DrawSimpleMenuItem(
+            PLUGIN_coin_OptionsY(i),
+            selected == i,
+            PLUGIN_coin_OptionTitle(i),
+            PLUGIN_coin_OptionColor(i)
+        );
+    }
     COIN_HOST__Draw_DrawString(20, 120, COLOR_GRAY, g_coinBackShort);
+    COIN_HOST__Draw_FlushFramebuffer();
+    COIN_HOST__Draw_Unlock();
+}
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawOptionsSelection(
+    u32 oldSelected,
+    u32 selected
+)
+{
+    u32 oldY = PLUGIN_coin_OptionsY(oldSelected);
+    u32 newY = PLUGIN_coin_OptionsY(selected);
+
+    COIN_HOST__Draw_Lock();
+    COIN_HOST__Draw_DrawString(10, oldY, COLOR_BLACK, g_coinMenuClearRow);
+    COIN_HOST__Draw_DrawString(10, newY, COLOR_BLACK, g_coinMenuClearRow);
+    PLUGIN_coin_DrawSimpleMenuItem(
+        oldY,
+        false,
+        PLUGIN_coin_OptionTitle(oldSelected),
+        PLUGIN_coin_OptionColor(oldSelected)
+    );
+    PLUGIN_coin_DrawSimpleMenuItem(
+        newY,
+        true,
+        PLUGIN_coin_OptionTitle(selected),
+        PLUGIN_coin_OptionColor(selected)
+    );
+    COIN_HOST__Draw_FlushFramebuffer();
+    COIN_HOST__Draw_Unlock();
+}
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawOptionValues(
+    bool achievementsChanged,
+    bool progressiveChanged,
+    u32 selected
+)
+{
+    COIN_HOST__Draw_Lock();
+    if (achievementsChanged)
+    {
+        u32 y = PLUGIN_coin_OptionsY(0u);
+        COIN_HOST__Draw_DrawString(10, y, COLOR_BLACK, g_coinMenuClearRow);
+        PLUGIN_coin_DrawSimpleMenuItem(
+            y,
+            selected == 0u,
+            PLUGIN_coin_OptionTitle(0u),
+            PLUGIN_coin_OptionColor(0u)
+        );
+    }
+    if (progressiveChanged)
+    {
+        u32 y = PLUGIN_coin_OptionsY(1u);
+        COIN_HOST__Draw_DrawString(10, y, COLOR_BLACK, g_coinMenuClearRow);
+        PLUGIN_coin_DrawSimpleMenuItem(
+            y,
+            selected == 1u,
+            PLUGIN_coin_OptionTitle(1u),
+            PLUGIN_coin_OptionColor(1u)
+        );
+    }
     COIN_HOST__Draw_FlushFramebuffer();
     COIN_HOST__Draw_Unlock();
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
 {
-    PLUGIN_coin_DrawOptions();
+    u32 selected = 0;
+    PLUGIN_coin_DrawOptions(selected);
 
     do
     {
         u32 pressed = COIN_HOST__waitInputWithTimeout(50);
         if (pressed & KEY_B)
             break;
-        if (pressed & KEY_A)
+        if (pressed & (KEY_DUP | KEY_DDOWN))
         {
-            if (g_coinAchievementsEnabled)
+            u32 oldSelected = selected;
+            selected = selected ? 0u : 1u;
+            PLUGIN_coin_RedrawOptionsSelection(oldSelected, selected);
+        }
+        else if (pressed & KEY_A)
+        {
+            if (selected == 0u)
             {
-                if (PLUGIN_coin_ConfirmAchievementAction())
-                    g_coinAchievementsEnabled = false;
+                if (g_coinAchievementsEnabled)
+                {
+                    if (PLUGIN_coin_ConfirmAchievementAction())
+                        g_coinAchievementsEnabled = false;
+                    PLUGIN_coin_DrawOptions(selected);
+                }
+                else
+                {
+                    bool progressiveChanged = !g_coinProgressiveCostEnabled;
+                    g_coinAchievementsEnabled = true;
+                    PLUGIN_coin_SetProgressiveCostEnabled(true);
+                    PLUGIN_coin_RedrawOptionValues(true, progressiveChanged, selected);
+                }
             }
             else
             {
-                g_coinAchievementsEnabled = true;
+                if (g_coinProgressiveCostEnabled)
+                {
+                    if (PLUGIN_coin_ConfirmProgressiveCostAction())
+                    {
+                        g_coinAchievementsEnabled = false;
+                        PLUGIN_coin_SetProgressiveCostEnabled(false);
+                    }
+                    PLUGIN_coin_DrawOptions(selected);
+                }
+                else
+                {
+                    PLUGIN_coin_SetProgressiveCostEnabled(true);
+                    PLUGIN_coin_RedrawOptionValues(false, true, selected);
+                }
             }
-            PLUGIN_coin_DrawOptions();
         }
     } while (!COIN_HOST__menuShouldExit);
 
