@@ -68,7 +68,7 @@ Side note: Do not use Play Coin setters outside of the one provided by this mod!
 * Custom notifications for... *secrets* - with Club Penguin inspired difficulty tiers
 * WIP Blackjack casino with gambling lol (walking to the next casino required if you get a backoff)
 
-PlayCoinz patches the Home Menu directly, with the user-facing menus and extra features provided through Rosalina.
+PlayCoinz patches Home Menu, News, & Notifications directly, with menus and extra features provided through Rosalina.
 
 Features art by [@AnasAbdin](https://x.com/AnasAbdin) for *\*secret\** top-screen images, huge thanks to him for giving permission to use them!
 
