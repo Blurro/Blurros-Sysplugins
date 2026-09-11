@@ -54,7 +54,85 @@ PLUGIN_coin_binLast:
 
 .global PLUGIN_coin_handoffControl
 PLUGIN_coin_handoffControl:
-    .word 0
+    .word 0                      @ calc in flight
+    .word 0                      @ ignore RTC catch-up once
+
+.global PLUGIN_coin_rtcDayGateHook
+.type   PLUGIN_coin_rtcDayGateHook, %function
+PLUGIN_coin_rtcDayGateHook:
+    @ redo HOME's 64-bit current day - saved day compare
+    subs    r0, r7, r5
+    sbcs    r0, r8, r6
+    blt     rtcClockBehind
+    beq     rtcDayGateContinue
+
+    @ one-day rollover works as usual
+    @ anything older gets skipped and cant pay out
+    @ compare the full 64-bit gap against one day
+    push    {r1, r2}
+    subs    r1, r7, r5
+    sbcs    r2, r8, r6
+    adr     r0, rtcOneDay
+    ldr     r0, [r0, #4]
+    cmp     r2, r0
+    blo     rtcForwardReady
+    bhi     rtcForwardSuppress
+    adr     r0, rtcOneDay
+    ldr     r0, [r0]
+    cmp     r1, r0
+    bls     rtcForwardReady
+
+rtcForwardSuppress:
+    @ mark this before reading anything Rosalina can swap
+    adr     r0, PLUGIN_coin_homePtr
+    ldr     r0, [r0]
+    ldr     r0, [r0, #0x24]
+    mov     r1, #1
+    str     r1, [r0]
+    str     r1, [r0, #4]
+    mcr     p15, 0, r1, c7, c10, 5
+
+rtcForwardReady:
+    pop     {r1, r2}
+    @ redo the positive flags HOME's +0x34 branch expects
+    subs    r0, r7, r5
+    sbcs    r0, r8, r6
+
+    @ skip straight to today and start a clean history query
+    mov     r5, r7
+    mov     r6, r8
+    mov     r0, #0
+    strh    r0, [r4, #6]         @ HOME coins today
+    str     r0, [r4, #8]         @ force one current-day history query
+    str     r0, [r4, #12]        @ no current-day history consumed yet
+
+    @ save today's cursor now in case HOME exits before the pre hook
+    ldrh    r0, [sp, #0x34]
+    strh    r0, [r4, #16]
+    ldrb    r0, [sp, #0x38]
+    strb    r0, [r4, #18]
+    ldrb    r0, [sp, #0x39]
+    strb    r0, [r4, #19]
+
+    @ HOME stores r5/r6 next, then reaches the usual pre hook
+rtcDayGateContinue:
+    adr     r0, PLUGIN_coin_homePtr
+    ldr     r0, [r0]
+    sub     r0, r0, #0x10       @ coinCalc + 0x2c
+    mov     pc, r0
+
+rtcClockBehind:
+    @ backwards RTC cant move the saved day or pay this history again
+    @ use the common post hook so its scratch still gets cleared
+    adr     r0, PLUGIN_coin_homePtr
+    ldr     r0, [r0]
+    add     r0, r0, #0x300
+    add     r0, r0, #0x0c       @ coinCalc + 0x348
+    mov     pc, r0
+
+rtcOneDay:
+    .word   0x914F0000
+    .word   0x00004E94
 
 .global PLUGIN_coin_homeLoaderPatch
 .type   PLUGIN_coin_homeLoaderPatch, %function
@@ -67,6 +145,7 @@ PLUGIN_coin_homeLoaderPatch:
     mov     r7, #1
     str     r7, [r8]
     mcr     p15, 0, r7, c7, c10, 5 @ publish inFlight before pointer loads
+    ldr     r0, [r8, #4]          @ stable RTC rebase marker
 
     ldr     r8, [r9, #8]
     ldr     r7, [sp, #0xc]
@@ -109,12 +188,34 @@ PLUGIN_coin_homeLoaderPatch:
     mov     r7, #0
     str     r7, [r8, #48]
 afterSplitProgression:
+    @ dont let restored history remainder pay on the next wake
+    @ HOME keeps its rebuilt progressive display while both our streams
+    @ rebase at the full current history total
+    cmp     r0, #0
+    beq     afterRtcBoundaryRebase
+    ldr     r5, [r8, #24]
+    str     r5, [r4, #12]
+    str     r5, [r8, #20]
+    mov     r5, #0
+    str     r5, [r8, #40]
+    str     r5, [r8, #44]
+afterRtcBoundaryRebase:
 
     @ no current pre-hook means no persistent accounting
     tst     r10, #1
     beq     finishHomeCalculation
 
     ldrh    r5, [r8, #4]          @ current invocation pre-calc coins
+
+    @ recovery can rebuild HOME's display but cant change saved coin state
+    cmp     r0, #0
+    beq     normalPersistentAccounting
+    ldr     r7, [r9]
+    strh    r5, [r7]
+    strh    r5, [r4, #4]
+    b       finishHomeCalculation
+
+normalPersistentAccounting:
     cmp     r6, r5
     subhs   r7, r6, r5
     movlo   r7, #0
@@ -219,6 +320,7 @@ afterBinLogic:
 finishHomeCalculation:
     ldr     r8, [r9, #0x24]
     mov     r7, #0
+    str     r7, [r8, #4]          @ consume RTC rebase marker once
     mcr     p15, 0, r7, c7, c10, 5 @ publish state before clearing inFlight
     str     r7, [r8]
     add     sp, sp, #0x7c

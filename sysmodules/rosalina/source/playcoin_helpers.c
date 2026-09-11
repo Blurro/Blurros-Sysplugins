@@ -70,6 +70,20 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_ResetExtendedData(void)
     data[6] = 0;
 }
 
+PLUGIN_CODE(coin) static void PLUGIN_coin_SyncAchievementSettingToExtendedData(void)
+{
+    u32 oldValue = g_coinExtendedData[COIN_EXT_TODAY_WORD];
+    u32 newValue = g_coinAchievementsEnabled ?
+        oldValue & ~COIN_EXT_ACHIEVEMENTS_DISABLED :
+        oldValue | COIN_EXT_ACHIEVEMENTS_DISABLED;
+
+    if (newValue != oldValue)
+    {
+        g_coinExtendedData[COIN_EXT_TODAY_WORD] = newValue;
+        g_coinExtendedDirty = true;
+    }
+}
+
 PLUGIN_CODE(coin) static u32 PLUGIN_coin_SaturatingAdd(u32 left, u32 right)
 {
     u32 sum = left + right;
@@ -316,7 +330,7 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_CurrentCalendarDay(void)
     if (year < 1900u || month < 1u || month > 12u || day < 1u || day > 31u)
         return 0;
 
-    // One-based day ordinal leaves zero as the uninitialized sentinel.
+    // one-based days leave zero free for uninitialized state
     u32 ordinal = 1u;
     for (u32 y = 1900u; y < year; y++)
         ordinal += PLUGIN_coin_IsLeapYear(y) ? 366u : 365u;
@@ -345,30 +359,14 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
     if (currentDay == lastDay)
         return false;
 
-    u16 newToday = 0;
     if (currentDay < lastDay)
     {
-        u32 rollback = lastDay - currentDay;
-        if (rollback <= COIN_DAY_HISTORY_COUNT)
-        {
-            // The selected past day becomes Today. Only days older than it can
-            // remain valid relative to the newly selected calendar date.
-            newToday = PLUGIN_coin_GetHistoryDay(rollback - 1u);
-            for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
-            {
-                u32 source = i + rollback;
-                u16 value = source < COIN_DAY_HISTORY_COUNT ?
-                    PLUGIN_coin_GetHistoryDay(source) : 0;
-                PLUGIN_coin_SetHistoryDay(i, value);
-            }
-        }
-        else
-        {
-            for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
-                PLUGIN_coin_SetHistoryDay(i, 0);
-        }
+        // dont move tracked days backwards or wipe buckets when RTC is behind
+        return false;
     }
-    else if (currentDay - lastDay >= 7u)
+
+    u16 newToday = 0;
+    if (currentDay - lastDay >= 7u)
     {
         for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
             PLUGIN_coin_SetHistoryDay(i, 0);
@@ -465,7 +463,8 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateExtendedData(const u32 *data)
 
     return deposited <= COIN_BLACKJACK_COUNTER_MAX &&
         qualified <= deposited &&
-        (data[COIN_EXT_TODAY_WORD] & 0xFFFF0000u) == 0;
+        (data[COIN_EXT_TODAY_WORD] &
+            ~(0x0000FFFFu | COIN_EXT_ACHIEVEMENTS_DISABLED)) == 0;
 }
 
 PLUGIN_CODE(coin) static Result PLUGIN_coin_WriteExtendedData(Handle file, u32 key)

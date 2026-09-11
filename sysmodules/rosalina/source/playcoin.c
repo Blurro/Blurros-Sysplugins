@@ -300,6 +300,16 @@ PLUGIN_RODATA(coin) static const char g_coinProgressiveCostWarning[] =
     "'recommended' coin balance, and disable\n"
     "achievements.\n"
     "You can turn both back on at any time.";
+PLUGIN_RODATA(coin) static const char g_coinAchievementsDisableExplain[] =
+    "In PlayCoinz you can earn Achievements,\n"
+    "alerting with custom notifications upon\n"
+    "earning them.\n"
+    "\n"
+    "Disabling will prevent awarding these and\n"
+    "hide references to them.\n"
+    "\n"
+    "You can delete notifications from the\n"
+    "Achievements page beforehand.";
 PLUGIN_RODATA(coin) static const char g_coinResultAlreadyExists[] =
     "This already exists in your notifications!";
 PLUGIN_RODATA(coin) static const char g_coinResultDone[] = "Done!";
@@ -318,6 +328,8 @@ PLUGIN_RODATA(coin) static const char g_coinDayBaselineFmt[] = "Day baseline: %l
 PLUGIN_RODATA(coin) static const char g_coinSpentBoundaryFmt[] = "Spent boundary: %lu";
 PLUGIN_RODATA(coin) static const char g_coinHistoryRemainderFmt[] = "Unspent: %lu steps";
 PLUGIN_RODATA(coin) static const char g_coinTodayFmt[] = "Coins today: %lu";
+PLUGIN_RODATA(coin) static const char g_coinProgressiveTodayFmt[] =
+    "Progressive Coins today: %lu";
 PLUGIN_RODATA(coin) static const char g_coinNextCoinFmt[] = "Next coin #%lu: %lu steps";
 PLUGIN_RODATA(coin) static const char g_coinHistoryNeededFmt[] = "History needed: %lu steps";
 PLUGIN_RODATA(coin) static const char g_coinBucketGroup[] = "Rolling walk buckets";
@@ -338,6 +350,10 @@ PLUGIN_RODATA(coin) static const char g_successText[] = "Play Coins successfully
 PLUGIN_RODATA(coin) static const char g_errorFormat[] = "Error: 0x%08lx";
 PLUGIN_RODATA(coin) static const char g_recommendedText[] = "Recommended:";
 PLUGIN_RODATA(coin) static const char g_recommendedFormat[] = "Press Y to return to tracked coins: %lu";
+PLUGIN_RODATA(coin) static const char g_progressiveDisabledEditorText[] =
+    "(progressive cost mode disabled)";
+PLUGIN_RODATA(coin) static const char g_achievementsDisabledEditorText[] =
+    "(achievements disabled)";
 PLUGIN_RODATA(coin) static const char g_warningText[] = "Warning:";
 PLUGIN_RODATA(coin) static const char g_warningLifetimeText[] = "Coins are higher than lifetime earnings!";
 PLUGIN_RODATA(coin) static const char g_warningSecretText[] = "this may affect when... *secrets* are found";
@@ -380,6 +396,7 @@ PLUGIN_RODATA(coin) static const char g_clearResultLine[] = "                   
 #define COIN_EXT_LAST_DAY_WORD           2u
 #define COIN_EXT_DAY_HISTORY_WORD        3u
 #define COIN_EXT_TODAY_WORD              6u
+#define COIN_EXT_ACHIEVEMENTS_DISABLED   (1u << 31)
 #define COIN_DAY_HISTORY_COUNT           6u
 #define COIN_DEBUG_BUCKET_X              155u
 #define COIN_DEBUG_BUCKET_NOW_Y          49u
@@ -518,6 +535,8 @@ extern bool PLUGIN_coin_AttachHomeMenu(void);
 extern bool PLUGIN_coin_LockHomeState(Handle *processHandleOut);
 extern bool PLUGIN_coin_UnlockHomeState(Handle processHandle);
 extern Result PLUGIN_coin_TriggerAchievement(u32 achievementIndex);
+static void PLUGIN_coin_SyncAchievementSettingToExtendedData(void);
+static void PLUGIN_coin_HandleCoins(void);
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_SaveMenuSettings(void)
 {
@@ -527,6 +546,11 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SaveMenuSettings(void)
         (g_coinAchievementsEnabled ? COIN_SETTINGS_ACHIEVEMENTS : 0u) |
         (g_coinProgressiveCostEnabled ? COIN_SETTINGS_PROGRESSIVE_COST : 0u);
     (void)COIN_MENU__SaveData(COIN_PLUGIN_ID, &settings, sizeof(settings));
+
+    // Loader cant use MENU's API, so mirror this one setting into coins.bin
+    PLUGIN_coin_SyncAchievementSettingToExtendedData();
+    if (g_patchedHome && !g_coinsFailed && g_coinExtendedDirty)
+        PLUGIN_coin_HandleCoins();
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_LoadMenuSettings(void)
@@ -586,7 +610,12 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SyncProgressiveToday(void)
 
 PLUGIN_CODE(coin) static bool PLUGIN_coin_TodayExceedsHomeCounter(void)
 {
-    return PLUGIN_coin_stepDiagnostics.valid == 1u &&
+    u32 currentDay = PLUGIN_coin_CurrentCalendarDay();
+    u32 trackedDay = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
+
+    // dont clamp from HOME while RTC is behind PlayCoinz's saved day
+    return currentDay && (!trackedDay || currentDay >= trackedDay) &&
+        PLUGIN_coin_stepDiagnostics.valid == 1u &&
         PLUGIN_coin_GetTodayWalked() > PLUGIN_coin_stepDiagnostics.coinsToday;
 }
 
@@ -595,8 +624,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTodayToHomeCounter(void)
     if (!PLUGIN_coin_TodayExceedsHomeCounter())
         return;
 
-    // HOME may clear its own counter later than the calendar bucket. It is only
-    // a one-way ceiling: never raise the date-backed value from HOME's stale day.
+    // HOME can reset later than us, so this may only lower Today
     PLUGIN_coin_SetTodayWalked((u16)PLUGIN_coin_stepDiagnostics.coinsToday);
     g_coinExtendedDirty = true;
 }
@@ -725,7 +753,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     g_coinBalanceEvent = false;
     g_coinGambleEvent = false;
 
-    // Achievement checks are event-driven and run only after the new state is saved.
+    // run achievement checks after the new coin state is saved
     if (earnedEvent)
         PLUGIN_coin_CheckWalkAchievements();
     if (spentEvent)
@@ -849,6 +877,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SetupCoins(void)
 
         if (!g_coinsFailed)
         {
+            PLUGIN_coin_SyncAchievementSettingToExtendedData();
             PLUGIN_coin_UpdateDayHistory();
             PLUGIN_coin_SyncProgressiveToday();
         }
@@ -1011,7 +1040,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_SetPlayCoins(u16 amount)
         return res;
     }
 
-    // The file and shared accounting become visible within one HOME boundary.
+    // the file and shared counters settle within one HOME boundary
     coinsBin = (u32)amount + coinsSpent;
     g_coinDat = newAmount; // save (coins) to coinsDat so that next coinsSpent recalc is correct
     COIN_HOST__svcFlushEntireDataCache();

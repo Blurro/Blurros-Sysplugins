@@ -21,6 +21,7 @@
 #define COIN_EXT_BLACKJACK_COUNTERS_WORD 0u
 #define COIN_EXT_BLACKJACK_SURPLUS_WORD  1u
 #define COIN_EXT_TODAY_WORD              6u
+#define COIN_EXT_ACHIEVEMENTS_DISABLED   (1u << 31)
 #define COIN_BLACKJACK_COUNTER_MAX       30000u
 #define COIN_ACHIEVEMENT_MASK            0x0003FFFFu
 
@@ -158,19 +159,29 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateExtendedData(const u32 *data)
 
     return deposited <= COIN_BLACKJACK_COUNTER_MAX &&
         qualified <= deposited &&
-        (data[COIN_EXT_TODAY_WORD] & 0xFFFF0000u) == 0;
+        (data[COIN_EXT_TODAY_WORD] &
+            ~(0x0000FFFFu | COIN_EXT_ACHIEVEMENTS_DISABLED)) == 0;
 }
 
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_ReadBlackjackSurplus(
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadExtendedState(
     Handle file,
     u64 fileSize,
-    u32 key
+    u32 key,
+    u32 *outBlackjackSurplus,
+    bool *outAchievementsEnabled
 )
 {
+    if (!outBlackjackSurplus)
+        return false;
+
+    *outBlackjackSurplus = 0;
+    if (outAchievementsEnabled)
+        *outAchievementsEnabled = true;
+
     if (fileSize != COIN_FILE_NO_ACHIEVEMENT_SIZE &&
         fileSize != COIN_FILE_WITH_ACHIEVEMENT_SIZE)
     {
-        return 0;
+        return false;
     }
 
     u32 stored[COIN_FILE_EXTENSION_WORDS + 1u];
@@ -186,7 +197,7 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_ReadBlackjackSurplus(
         !PLUGIN_coin_DecryptExtendedData(stored, key, data) ||
         !PLUGIN_coin_ValidateExtendedData(data))
     {
-        return 0;
+        return false;
     }
 
     if (fileSize == COIN_FILE_WITH_ACHIEVEMENT_SIZE)
@@ -205,11 +216,74 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_ReadBlackjackSurplus(
                 achievement[0], achievement[1], key, &mask) ||
             (mask & ~COIN_ACHIEVEMENT_MASK))
         {
-            return 0;
+            return false;
         }
     }
 
-    return data[COIN_EXT_BLACKJACK_SURPLUS_WORD];
+    *outBlackjackSurplus = data[COIN_EXT_BLACKJACK_SURPLUS_WORD];
+    if (outAchievementsEnabled)
+    {
+        *outAchievementsEnabled =
+            !(data[COIN_EXT_TODAY_WORD] & COIN_EXT_ACHIEVEMENTS_DISABLED);
+    }
+    return true;
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_AchievementsEnabledForLoader(void)
+{
+    // missing/bad/old state keeps achievements on
+    bool enabled = true;
+    FS_Archive sd;
+    Handle file = 0;
+    Result rc = COIN_HOST__FSUSER_OpenArchive(
+        &sd,
+        ARCHIVE_SDMC,
+        COIN_HOST__fsMakePath(PATH_EMPTY, NULL)
+    );
+    if (R_FAILED(rc))
+        return true;
+
+    rc = COIN_HOST__FSUSER_OpenFile(
+        &file,
+        sd,
+        COIN_HOST__fsMakePath(PATH_ASCII, g_coinFilePath),
+        FS_OPEN_READ,
+        0
+    );
+    if (R_SUCCEEDED(rc))
+    {
+        u64 fileSize = 0;
+        u32 base[8];
+        u32 read = 0;
+        u32 lifetimeEarned = 0;
+        u32 lifetimeSpent = 0;
+        if (R_SUCCEEDED(COIN_HOST__FSFILE_GetSize(file, &fileSize)) &&
+            R_SUCCEEDED(COIN_HOST__FSFILE_Read(
+                file,
+                &read,
+                0,
+                base,
+                sizeof(base))) &&
+            read == sizeof(base) &&
+            base[0] <= 30000u &&
+            base[7] <= 30000u &&
+            PLUGIN_coin_Decrypt(base[2], base[3], base[4], &lifetimeEarned) &&
+            PLUGIN_coin_Decrypt(base[5], base[6], base[4], &lifetimeSpent))
+        {
+            u32 blackjackSurplus = 0;
+            (void)PLUGIN_coin_ReadExtendedState(
+                file,
+                fileSize,
+                base[4],
+                &blackjackSurplus,
+                &enabled
+            );
+        }
+        COIN_HOST__FSFILE_Close(file);
+    }
+
+    COIN_HOST__FSUSER_CloseArchive(sd);
+    return enabled;
 }
 
 PLUGIN_CODE(coin) static Result PLUGIN_coin_GetPlayCoins(u16 *out)
@@ -388,10 +462,13 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
         // wipe Loader's one-shot invalid-base marker
         coinChange[1] = 0;
 
-        u32 blackjackSurplus = PLUGIN_coin_ReadBlackjackSurplus(
+        u32 blackjackSurplus = 0;
+        (void)PLUGIN_coin_ReadExtendedState(
             file,
             fileSize,
-            base[4]
+            base[4],
+            &blackjackSurplus,
+            NULL
         );
         u32 capacity = PLUGIN_coin_SaturatingAdd(lifetimeEarned, blackjackSurplus);
         if (lifetimeSpent > capacity)

@@ -38,6 +38,7 @@ extern void *pluginTable_coin[];
 extern void PLUGIN_coin_ClearTransientHomePointer(void);
 extern bool PLUGIN_coin_InitializeHomeMenuState(u16 *coinDat, u32 *coinData, u16 *coinChange, u32 homePointer);
 extern void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize);
+extern bool PLUGIN_coin_AchievementsEnabledForLoader(void);
 
 extern u16 PLUGIN_coin_dat;
 extern u32 PLUGIN_coin_bin[4];
@@ -50,6 +51,7 @@ extern void PLUGIN_coin_LoaderPatchCodeHook(void);
 extern void PLUGIN_coin_homeLoaderPatch(void);
 extern void PLUGIN_coin_homeLoaderUIHook(void);
 extern void PLUGIN_coin_preCoinHook(void);
+extern void PLUGIN_coin_rtcDayGateHook(void);
 extern void PLUGIN_coin_historyDiagHook(void);
 extern void PLUGIN_coin_costPlus3Hook(void);
 extern void PLUGIN_coin_CreateCodeSetHook(void);
@@ -648,6 +650,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     u32 newsCallAddress = 0;
     u32 newsOriginalTarget = 0;
     bool newsDuplicate = false;
+    bool achievementsEnabled = PLUGIN_coin_AchievementsEnabledForLoader();
     u32 mainEndOffset = textSize - 0x100u;
     u32 scanEndOffset = textSize - 9u * sizeof(u32);
 
@@ -684,7 +687,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
             }
         }
 
-        if (!newsDuplicate && scan[0] == 0xE3A01C12u)
+        if (achievementsEnabled && !newsDuplicate && scan[0] == 0xE3A01C12u)
         {
             u32 candidateCall = 0;
             u32 candidateTarget = 0;
@@ -726,7 +729,12 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     }
 
     u32 *coinCalc = (u32*)(code + coinCalcRaw);
-    if (coinCalc[0x168u / 4u] != 0xE05EA000u ||
+    if (coinCalc[0x24u / 4u] != 0xE0570005u ||
+        coinCalc[0x28u / 4u] != 0xE0D80006u ||
+        coinCalc[0x2Cu / 4u] != 0xE58D5028u ||
+        coinCalc[0x30u / 4u] != 0xE58D6024u ||
+        coinCalc[0x34u / 4u] != 0xBA00000Cu ||
+        coinCalc[0x168u / 4u] != 0xE05EA000u ||
         coinCalc[0x16Cu / 4u] != 0xE3A03000u)
     {
         PLUGIN_coin_ClearTransientHomePointer();
@@ -743,7 +751,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     }
 
     // modern EUR/USA match this, old 7.x just has no site
-    if (!newsDuplicate && newsCallAddress)
+    if (achievementsEnabled && !newsDuplicate && newsCallAddress)
         (void)PLUGIN_coin_PatchHomeNewsIcon(code, newsCallAddress, newsOriginalTarget);
 
     if (preserveBadgeOffset)
@@ -779,6 +787,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     u32 *mappedHandoffControl =
         (u32*)((u32)&PLUGIN_coin_handoffControl + stateDelta);
     *mappedHandoffControl = 0;
+    mappedHandoffControl[1] = 0;
     if (!PLUGIN_coin_InitializeHomeMenuState(mappedDat, mappedBin, mappedChange, homePointer))
     {
         PLUGIN_coin_UnmapOwnPage(stateMapBase);
@@ -788,6 +797,9 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
 
     u32 patch[2] = {0xE51FF004u, PLUGIN_coin_Phys(PLUGIN_coin_homeLoaderPatch)};
     PLUGIN_coin_PatchWords(code, coinCalcOffset + 0x348u, patch, 2);
+
+    patch[1] = PLUGIN_coin_Phys(PLUGIN_coin_rtcDayGateHook);
+    PLUGIN_coin_PatchWords(code, coinCalcOffset + 0x24u, patch, 2);
 
     patch[1] = PLUGIN_coin_Phys(PLUGIN_coin_homeLoaderUIHook);
     PLUGIN_coin_PatchWords(code, coinUIOffset + 0x8u, patch, 2);
@@ -981,7 +993,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_SetNewslistHookWords(
 
 PLUGIN_CODE(coin) static bool PLUGIN_coin_IsNewslistTitleId(u64 programId)
 {
-    // NEWS has regional titleids even though the resolver shape is shared
+    // newslist is the regional Notifications applet
     return programId == COIN_NEWSLIST_TITLE_ID_JPN ||
            programId == COIN_NEWSLIST_TITLE_ID_USA ||
            programId == COIN_NEWSLIST_TITLE_ID_EUR ||
@@ -999,7 +1011,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
     g_coinNewslistPending = false;
     g_coinNewslistIconBase = 0;
 
-    if (!header || !PLUGIN_coin_IsNewslistTitleId(header->program_id))
+    if (!header || !PLUGIN_coin_IsNewslistTitleId(header->program_id) ||
+        !PLUGIN_coin_AchievementsEnabledForLoader())
         return;
 
     u32 hookAddress = 0;
@@ -1058,7 +1071,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
     site[1] = PLUGIN_coin_Phys(PLUGIN_coin_NewslistIconHook);
     PLUGIN_coin_svcFlushEntireDataCache();
 
-    // extra icon pages belong to newslist itself
+    // these extra icon pages belong to newslist itself
     header->rw_size_total += COIN_NEWSLIST_ICON_PAGES;
     g_coinNewslistIconBase = iconBase;
     g_coinNewslistPending = true;

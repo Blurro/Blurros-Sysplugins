@@ -131,7 +131,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_HasU16Terminator(const u16 *text, u32 
 
 PLUGIN_CODE(coin) static const char *PLUGIN_coin_PackedAssetPath(u32 assetIndex)
 {
-    // Keep this as branches rather than a compiler-generated host .rodata pointer table.
+    // branches stop GCC making a host rodata pointer table
     if (assetIndex < COIN_ASSET_MEDIUMTOP)
     {
         if (assetIndex < COIN_ASSET_ACHV)
