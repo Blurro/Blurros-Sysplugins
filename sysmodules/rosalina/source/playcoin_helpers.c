@@ -347,7 +347,8 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
     if (!currentDay)
         return false;
 
-    u32 lastDay = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
+    u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
+    u32 lastDay = dayState & COIN_EXT_DAY_VALUE_MASK;
     if (!lastDay)
     {
         g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] = currentDay;
@@ -359,22 +360,36 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
     if (currentDay == lastDay)
         return false;
 
+    // clock went backwards, just move the bucket anchor
     if (currentDay < lastDay)
     {
-        // dont move tracked days backwards or wipe buckets when RTC is behind
-        return false;
+        g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] =
+            currentDay | COIN_EXT_DAY_REBASE_PRESERVE;
+        g_coinExtendedDirty = true;
+        return true;
     }
 
-    u16 newToday = 0;
-    if (currentDay - lastDay >= 7u)
+    u32 delta = currentDay - lastDay;
+
+    // huge forward jump is probably a clock correction
+    if (delta > 300u)
+    {
+        g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] =
+            currentDay | COIN_EXT_DAY_REBASE_PRESERVE;
+        g_coinExtendedDirty = true;
+        return true;
+    }
+
+    // normal forward time ages the rolling week
+    if (delta >= 7u)
     {
         for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
             PLUGIN_coin_SetHistoryDay(i, 0);
+        PLUGIN_coin_SetTodayWalked(0);
     }
     else
     {
         u16 oldToday = PLUGIN_coin_GetTodayWalked();
-        u32 delta = currentDay - lastDay;
         for (s32 i = (s32)COIN_DAY_HISTORY_COUNT - 1; i >= 0; i--)
         {
             if ((u32)i >= delta)
@@ -384,10 +399,11 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
             else
                 PLUGIN_coin_SetHistoryDay((u32)i, 0);
         }
+        PLUGIN_coin_SetTodayWalked(0);
     }
 
+    // normal rotation lets HOME clamp Today again
     g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] = currentDay;
-    PLUGIN_coin_SetTodayWalked(newToday);
     g_coinExtendedDirty = true;
     return true;
 }

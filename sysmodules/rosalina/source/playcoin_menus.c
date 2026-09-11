@@ -287,7 +287,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebugBucketValuesNoLock(bool clear
         166u,
         COLOR_GRAY,
         g_coinBucketActiveFmt,
-        g_coinExtendedData[COIN_EXT_LAST_DAY_WORD]
+        g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] & COIN_EXT_DAY_VALUE_MASK
     );
 }
 

@@ -329,7 +329,7 @@ PLUGIN_RODATA(coin) static const char g_coinSpentBoundaryFmt[] = "Spent boundary
 PLUGIN_RODATA(coin) static const char g_coinHistoryRemainderFmt[] = "Unspent: %lu steps";
 PLUGIN_RODATA(coin) static const char g_coinTodayFmt[] = "Coins today: %lu";
 PLUGIN_RODATA(coin) static const char g_coinProgressiveTodayFmt[] =
-    "Progressive Coins today: %lu";
+    "(+3 mode) Coins today: %lu";
 PLUGIN_RODATA(coin) static const char g_coinNextCoinFmt[] = "Next coin #%lu: %lu steps";
 PLUGIN_RODATA(coin) static const char g_coinHistoryNeededFmt[] = "History needed: %lu steps";
 PLUGIN_RODATA(coin) static const char g_coinBucketGroup[] = "Rolling walk buckets";
@@ -394,6 +394,8 @@ PLUGIN_RODATA(coin) static const char g_clearResultLine[] = "                   
 #define COIN_EXT_BLACKJACK_COUNTERS_WORD 0u
 #define COIN_EXT_BLACKJACK_SURPLUS_WORD  1u
 #define COIN_EXT_LAST_DAY_WORD           2u
+#define COIN_EXT_DAY_REBASE_PRESERVE     (1u << 31)
+#define COIN_EXT_DAY_VALUE_MASK          0x7FFFFFFFu
 #define COIN_EXT_DAY_HISTORY_WORD        3u
 #define COIN_EXT_TODAY_WORD              6u
 #define COIN_EXT_ACHIEVEMENTS_DISABLED   (1u << 31)
@@ -611,9 +613,13 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SyncProgressiveToday(void)
 PLUGIN_CODE(coin) static bool PLUGIN_coin_TodayExceedsHomeCounter(void)
 {
     u32 currentDay = PLUGIN_coin_CurrentCalendarDay();
-    u32 trackedDay = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
+    u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
+    u32 trackedDay = dayState & COIN_EXT_DAY_VALUE_MASK;
 
-    // dont clamp from HOME while RTC is behind PlayCoinz's saved day
+    // keep preserved Today through a clock rebase
+    if (dayState & COIN_EXT_DAY_REBASE_PRESERVE)
+        return false;
+
     return currentDay && (!trackedDay || currentDay >= trackedDay) &&
         PLUGIN_coin_stepDiagnostics.valid == 1u &&
         PLUGIN_coin_GetTodayWalked() > PLUGIN_coin_stepDiagnostics.coinsToday;

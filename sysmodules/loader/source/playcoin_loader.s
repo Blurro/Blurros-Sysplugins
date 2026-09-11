@@ -97,8 +97,20 @@ rtcForwardReady:
     @ redo the positive flags HOME's +0x34 branch expects
     subs    r0, r7, r5
     sbcs    r0, r8, r6
+    b       rtcRebaseCurrentDay
 
-    @ skip straight to today and start a clean history query
+rtcClockBehind:
+    @ backwards gap: rebase the cursor and suppress this payout
+    adr     r0, PLUGIN_coin_homePtr
+    ldr     r0, [r0]
+    ldr     r0, [r0, #0x24]
+    mov     r1, #1
+    str     r1, [r0]
+    str     r1, [r0, #4]
+    mcr     p15, 0, r1, c7, c10, 5
+
+rtcRebaseCurrentDay:
+    @ r5:r6 = r7:r8 so HOME queries only the observed day
     mov     r5, r7
     mov     r6, r8
     mov     r0, #0
@@ -119,15 +131,6 @@ rtcDayGateContinue:
     adr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0]
     sub     r0, r0, #0x10       @ coinCalc + 0x2c
-    mov     pc, r0
-
-rtcClockBehind:
-    @ backwards RTC cant move the saved day or pay this history again
-    @ use the common post hook so its scratch still gets cleared
-    adr     r0, PLUGIN_coin_homePtr
-    ldr     r0, [r0]
-    add     r0, r0, #0x300
-    add     r0, r0, #0x0c       @ coinCalc + 0x348
     mov     pc, r0
 
 rtcOneDay:
