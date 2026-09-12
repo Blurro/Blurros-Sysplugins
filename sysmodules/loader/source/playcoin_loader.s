@@ -41,33 +41,54 @@ PLUGIN_coin_stepDiagnostics:
     .word 0 @ split progression active
     .word 0 @ calculation validity
     .word 0 @ invalid base pending
+    .word 0 @ last history query time low
+    .word 0 @ last history query time high
 @ -------- end of rosalina mirroring
 
 @ below is this side only
 .balign 4
-.global PLUGIN_coin_homePtr
-PLUGIN_coin_homePtr:
-    .word 0                      @ 0x1642C8
-
-PLUGIN_coin_binLast:
-    .word 0
-
 .global PLUGIN_coin_handoffControl
 PLUGIN_coin_handoffControl:
     .word 0                      @ calc in flight
     .word 0                      @ ignore RTC catch-up once
+    .word 0                      @ RTC day decision: 0 waiting, 1 exact +1, 2 reject
+    .word 0                      @ previous progressive step remainder
+    .word 0                      @ YYYY | MM << 16 | DD << 24 for this decision
+    .word 0                      @ calendar stamp being checked now
 
 .global PLUGIN_coin_rtcDayGateHook
 .type   PLUGIN_coin_rtcDayGateHook, %function
 PLUGIN_coin_rtcDayGateHook:
+    @ protect the whole RTC decision, not only the later coin hooks
+    push    {r0-r2}
+    adr     r0, PLUGIN_coin_handoffControl
+    mov     r1, #1
+    str     r1, [r0]
+
+    @ remember HOME's current date without retagging an older exact +1
+    ldrh    r1, [sp, #0x40]
+    ldrb    r2, [sp, #0x44]
+    orr     r1, r1, r2, lsl #16
+    ldrb    r2, [sp, #0x45]
+    orr     r1, r1, r2, lsl #24
+    str     r1, [r0, #20]
+    mcr     p15, 0, r1, c7, c10, 5
+    pop     {r0-r2}
+
     @ redo HOME's 64-bit current day - saved day compare
     subs    r0, r7, r5
     sbcs    r0, r8, r6
     blt     rtcClockBehind
-    beq     rtcDayGateContinue
 
-    @ one-day rollover works as usual
-    @ anything older gets skipped and cant pay out
+    @ sbcs Z covers only the high-word result, so check both halves
+    cmp     r7, r5
+    bne     rtcClockAhead
+    cmp     r8, r6
+    beq     rtcClockSame
+
+rtcClockAhead:
+    @ exact +1 is remembered for one previous-day settlement
+    @ other forward gaps stay current-day-only
     @ compare the full 64-bit gap against one day
     push    {r1, r2}
     subs    r1, r7, r5
@@ -75,15 +96,46 @@ PLUGIN_coin_rtcDayGateHook:
     adr     r0, rtcOneDay
     ldr     r0, [r0, #4]
     cmp     r2, r0
-    blo     rtcForwardReady
+    blo     rtcForwardReject
     bhi     rtcForwardSuppress
     adr     r0, rtcOneDay
     ldr     r0, [r0]
     cmp     r1, r0
-    bls     rtcForwardReady
+    blo     rtcForwardReject
+    bhi     rtcForwardSuppress
+
+    @ only an exact Nintendo RTC +1 can settle yesterday
+    adr     r0, PLUGIN_coin_handoffControl
+    ldr     r1, [r0, #20]
+    str     r1, [r0, #16]
+    adr     r2, PLUGIN_coin_homePtr
+    ldr     r2, [r2]
+    ldr     r2, [r2, #8]
+    ldr     r2, [r2, #40]        @ old progressive remainder before rebase
+    str     r2, [r0, #12]
+    mov     r1, #1
+    str     r1, [r0, #8]
+    b       rtcForwardReady
+
+rtcForwardReject:
+    adr     r0, PLUGIN_coin_handoffControl
+    ldr     r1, [r0, #20]
+    str     r1, [r0, #16]
+    mov     r1, #0
+    str     r1, [r0, #12]
+    mov     r1, #2
+    str     r1, [r0, #8]
+    b       rtcForwardReady
 
 rtcForwardSuppress:
     @ mark this before reading anything Rosalina can swap
+    adr     r0, PLUGIN_coin_handoffControl
+    ldr     r1, [r0, #20]
+    str     r1, [r0, #16]
+    mov     r1, #0
+    str     r1, [r0, #12]
+    mov     r1, #2
+    str     r1, [r0, #8]
     adr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0]
     ldr     r0, [r0, #0x24]
@@ -101,6 +153,14 @@ rtcForwardReady:
 
 rtcClockBehind:
     @ backwards gap: rebase the cursor and suppress this payout
+    push    {r1}
+    adr     r0, PLUGIN_coin_handoffControl
+    ldr     r1, [r0, #20]
+    str     r1, [r0, #16]
+    mov     r1, #0
+    str     r1, [r0, #12]
+    mov     r1, #2
+    str     r1, [r0, #8]
     adr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0]
     ldr     r0, [r0, #0x24]
@@ -108,6 +168,29 @@ rtcClockBehind:
     str     r1, [r0]
     str     r1, [r0, #4]
     mcr     p15, 0, r1, c7, c10, 5
+
+    pop     {r1}
+    b       rtcRebaseCurrentDay
+
+rtcClockSame:
+    @ equality rejects a displayed-date-only rollover
+    @ dont overwrite an exact +1 waiting for Rosalina
+    push    {r1}
+    adr     r0, PLUGIN_coin_handoffControl
+    ldr     r1, [r0, #8]
+    cmp     r1, #1
+    beq     rtcClockSameReady
+    ldr     r1, [r0, #20]
+    str     r1, [r0, #16]
+    mov     r1, #0
+    str     r1, [r0, #12]
+    mov     r1, #2
+    str     r1, [r0, #8]
+rtcClockSameReady:
+    pop     {r1}
+    subs    r0, r7, r5
+    sbcs    r0, r8, r6
+    b       rtcDayGateContinue
 
 rtcRebaseCurrentDay:
     @ r5:r6 = r7:r8 so HOME queries only the observed day
@@ -137,6 +220,14 @@ rtcOneDay:
     .word   0x914F0000
     .word   0x00004E94
 
+.balign 4
+.global PLUGIN_coin_homePtr
+PLUGIN_coin_homePtr:
+    .word 0                      @ 0x1642C8
+
+PLUGIN_coin_binLast:
+    .word 0
+
 .global PLUGIN_coin_homeLoaderPatch
 .type   PLUGIN_coin_homeLoaderPatch, %function
 PLUGIN_coin_homeLoaderPatch:
@@ -159,7 +250,8 @@ PLUGIN_coin_homeLoaderPatch:
     str     r7, [r8, #20]
     ldrh    r7, [r4, #6]
     str     r7, [r8, #28]
-    mov     r7, #1
+    ldr     r7, [r8, #8]
+    orr     r7, r7, #1
     str     r7, [r8, #8]
 
     @ consume only state produced by this calculation
@@ -390,19 +482,26 @@ PLUGIN_coin_preCoinHook:
 PLUGIN_coin_historyDiagHook:
     subs    sl, lr, r0
     mov     r3, #0
-    adr     r2, PLUGIN_coin_homePtr
-    ldr     r2, [r2]
+    ldr     r2, PLUGIN_coin_homePtr
     ldr     r3, [r2, #0x24]
     mov     r2, #1
     str     r2, [r3]
     mcr     p15, 0, r2, c7, c10, 5 @ publish inFlight before pointer loads
     mov     r3, #0
-    adr     r2, PLUGIN_coin_homePtr
-    ldr     r2, [r2]
+    ldr     r2, PLUGIN_coin_homePtr
     ldr     r2, [r2, #8]
+    ldr     r3, [r2, #8]
+    bic     r3, r3, #2
+    str     r3, [r2, #8]
+    mcr     p15, 0, r3, c7, c10, 5
     str     lr, [r2, #24]
-    adr     r2, PLUGIN_coin_homePtr
-    ldr     r2, [r2]
+    str     r5, [r2, #60]
+    str     r6, [r2, #64]
+    mcr     p15, 0, r3, c7, c10, 5
+    orr     r3, r3, #2
+    str     r3, [r2, #8]
+    mov     r3, #0
+    ldr     r2, PLUGIN_coin_homePtr
     add     r2, r2, #0x100
     add     r2, r2, #0x34
     mov     pc, r2

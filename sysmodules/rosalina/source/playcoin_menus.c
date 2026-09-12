@@ -313,7 +313,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
     COIN_BLUR__DrawFeatureFrame(g_coinDebugTitle);
 
     volatile CoinStepDiagnostics *source = &PLUGIN_coin_stepDiagnostics;
-    if (source->valid != 1u)
+    if ((source->valid & 1u) == 0u)
     {
         COIN_HOST__Draw_DrawString(20, 42, COLOR_GRAY, g_coinDiagWaiting);
     }
@@ -328,7 +328,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
         d.coinsToday = source->coinsToday;
 
         u32 liveProgress = d.liveTotal >= d.liveBoundary ? d.liveTotal - d.liveBoundary : 0u;
-        u32 historyProgress = d.historyTotal >= d.historyBoundary ? d.historyTotal - d.historyBoundary : 0u;
+        u32 historyProgress = d.liveTotal >= d.historyBoundary ? d.liveTotal - d.historyBoundary : 0u;
         u32 nextCheck = liveProgress >= 100u ? 0u : 100u - liveProgress;
         u32 nextCost = PLUGIN_coin_NextStepCost(d.coinsToday);
         u32 remaining = historyProgress >= nextCost ? 0u : nextCost - historyProgress;
@@ -342,10 +342,9 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
         COIN_HOST__Draw_DrawFormattedString(20, 88, COLOR_YELLOW, g_coinNextCheckFmt, nextCheck);
 
         COIN_HOST__Draw_DrawString(20, 104, COLOR_GRAY, g_coinHistoryGroup);
-        COIN_HOST__Draw_DrawFormattedString(20, 117, COLOR_WHITE, g_coinTotalFmt, d.historyTotal);
-        COIN_HOST__Draw_DrawFormattedString(20, 130, COLOR_WHITE, g_coinDayBaselineFmt, dayBaseline);
-        COIN_HOST__Draw_DrawFormattedString(20, 143, COLOR_WHITE, g_coinSpentBoundaryFmt, d.historyBoundary);
-        COIN_HOST__Draw_DrawFormattedString(20, 156, COLOR_CYAN, g_coinHistoryRemainderFmt, historyProgress);
+        COIN_HOST__Draw_DrawFormattedString(20, 117, COLOR_WHITE, g_coinDayBaselineFmt, dayBaseline);
+        COIN_HOST__Draw_DrawFormattedString(20, 130, COLOR_WHITE, g_coinSpentBoundaryFmt, d.historyBoundary);
+        COIN_HOST__Draw_DrawFormattedString(20, 143, COLOR_CYAN, g_coinHistoryRemainderFmt, historyProgress);
 
         COIN_HOST__Draw_DrawString(20, 172, COLOR_GRAY, g_coinProgressionGroup);
         COIN_HOST__Draw_DrawFormattedString(
@@ -367,6 +366,52 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
         COIN_HOST__Draw_DrawString(COIN_DEBUG_BUCKET_X, 36u, COLOR_GRAY, g_coinBucketGroup);
         PLUGIN_coin_DrawDebugTimestampNoLock();
         PLUGIN_coin_DrawDebugBucketValuesNoLock(false);
+    }
+
+    COIN_HOST__Draw_DrawString(COIN_DEBUG_BUCKET_X, 185u, COLOR_GRAY, g_coinHistoryQueryGroup);
+    if (source->valid & 2u)
+    {
+        char queryDate[20];
+        u64 queryY2k = (u64)g_coinHistoryQueryTime[0] |
+            ((u64)g_coinHistoryQueryTime[1] << 32);
+        COIN_HOST__Draw_DrawFormattedString(
+            COIN_DEBUG_BUCKET_X,
+            198u,
+            COLOR_WHITE,
+            g_coinHistoryQueryFmt,
+            source->historyTotal
+        );
+        if (COIN_HOST__dateTimeToString(
+                queryDate,
+                queryY2k + 3155673600000ULL,
+                false) > 0)
+        {
+            COIN_HOST__Draw_DrawFormattedString(
+                COIN_DEBUG_BUCKET_X,
+                211u,
+                COLOR_WHITE,
+                g_coinHistoryQueryTimeFmt,
+                queryDate
+            );
+        }
+        else
+        {
+            COIN_HOST__Draw_DrawString(
+                COIN_DEBUG_BUCKET_X,
+                211u,
+                COLOR_RED,
+                g_coinHistoryQueryTimeBad
+            );
+        }
+    }
+    else
+    {
+        COIN_HOST__Draw_DrawString(
+            COIN_DEBUG_BUCKET_X,
+            198u,
+            COLOR_GRAY,
+            g_coinHistoryQueryNone
+        );
     }
 
     COIN_HOST__Draw_DrawString(20, 228, RGB565(15, 31, 15), g_coinDebugControls);

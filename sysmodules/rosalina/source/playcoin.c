@@ -131,10 +131,14 @@ extern bool PLUGIN_blur_AddFeatureItem(
     void (*callback)(void)
 );
 extern void PLUGIN_blur_DrawFeatureFrame(const char *title);
+extern bool PLUGIN_blur_SleepTryEnterIo(void);
+extern void PLUGIN_blur_SleepLeaveIo(void);
 NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_blur_AddTickFunc);
 NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_blur_RemoveTickFunc);
 NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_blur_AddFeatureItem);
 NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_blur_DrawFeatureFrame);
+NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_blur_SleepTryEnterIo);
+NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_blur_SleepLeaveIo);
 
 PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)PLUGIN_blur_AddTickFunc,
@@ -184,6 +188,8 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)RecursiveLock_Init,
     (void*)RecursiveLock_Lock,
     (void*)RecursiveLock_Unlock,
+    (void*)PLUGIN_blur_SleepTryEnterIo,
+    (void*)PLUGIN_blur_SleepLeaveIo,
 };
 
 #define COIN_BLUR__AddTickFunc            ((bool(*)(BlurTickFunc,s64))pluginTable_coin[0])
@@ -229,6 +235,8 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_HOST__RecursiveLock_Init      ((void(*)(RecursiveLock*))pluginTable_coin[44])
 #define COIN_HOST__RecursiveLock_Lock      ((void(*)(RecursiveLock*))pluginTable_coin[45])
 #define COIN_HOST__RecursiveLock_Unlock    ((void(*)(RecursiveLock*))pluginTable_coin[46])
+#define COIN_HOST__Sleep_TryEnterIo        ((bool(*)(void))pluginTable_coin[47])
+#define COIN_HOST__Sleep_LeaveIo           ((void(*)(void))pluginTable_coin[48])
 #define COIN_HOST__OperateOnProcessByName  ((Result(*)(const char*,OperateOnProcessCb))pluginTable_coin[1])
 #define COIN_HOST__svcFlushEntireDataCache ((void(*)(void))pluginTable_coin[11])
 #define COIN_HOST__svcInvalidateEntireInstructionCache ((void(*)(void))pluginTable_coin[12])
@@ -252,6 +260,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 PLUGIN_RODATA(coin) static const char g_coinFilePath[] = "/luma/coins.bin";
 PLUGIN_RODATA(coin) static const char g_lumaPath[] = "/luma";
 PLUGIN_RODATA(coin) static const char g_gameCoinPath[] = "/gamecoin.dat";
+PLUGIN_RODATA(coin) static const char g_coinPtmU[] = "ptm:u";
 PLUGIN_RODATA(coin) const char g_coinMenuProcessName[] = "menu";
 PLUGIN_RODATA(coin) const char g_coinMenuTitle[] = "PlayCoinz Menu";
 PLUGIN_RODATA(coin) static const char g_coinBuiltInMenuTitle[] = "Set the number of Play Coins";
@@ -317,10 +326,11 @@ PLUGIN_RODATA(coin) static const char g_coinResultNotFound[] = "Notification not
 PLUGIN_RODATA(coin) static const char g_coinDebugTitle[] = "Play Coin Debug";
 PLUGIN_RODATA(coin) static const char g_coinDebugControls[] = "B: back";
 PLUGIN_RODATA(coin) static const char g_coinDiagWaiting[] = "Waiting for Home Menu coin state...";
-PLUGIN_RODATA(coin) static const char g_coinLiveGroup[] = "Live gate";
-PLUGIN_RODATA(coin) static const char g_coinHistoryGroup[] = "History accounting";
+PLUGIN_RODATA(coin) static const char g_coinLiveGroup[] = "HOME day state";
+PLUGIN_RODATA(coin) static const char g_coinHistoryGroup[] = "Accounting";
+PLUGIN_RODATA(coin) static const char g_coinHistoryQueryGroup[] = "Last history query";
 PLUGIN_RODATA(coin) static const char g_coinProgressionGroup[] = "Progression";
-PLUGIN_RODATA(coin) static const char g_coinTotalFmt[] = "Total: %lu";
+PLUGIN_RODATA(coin) static const char g_coinTotalFmt[] = "HOME total: %lu";
 PLUGIN_RODATA(coin) static const char g_coinBoundaryFmt[] = "Boundary: %lu";
 PLUGIN_RODATA(coin) static const char g_coinLiveProgressFmt[] = "Progress: %lu / 100";
 PLUGIN_RODATA(coin) static const char g_coinNextCheckFmt[] = "Next query: %lu steps";
@@ -330,8 +340,12 @@ PLUGIN_RODATA(coin) static const char g_coinHistoryRemainderFmt[] = "Unspent: %l
 PLUGIN_RODATA(coin) static const char g_coinTodayFmt[] = "Coins today: %lu";
 PLUGIN_RODATA(coin) static const char g_coinProgressiveTodayFmt[] =
     "(+3 mode) Coins today: %lu";
-PLUGIN_RODATA(coin) static const char g_coinNextCoinFmt[] = "Next coin #%lu: %lu steps";
-PLUGIN_RODATA(coin) static const char g_coinHistoryNeededFmt[] = "History needed: %lu steps";
+PLUGIN_RODATA(coin) static const char g_coinNextCoinFmt[] = "Coin #%lu cost: %lu";
+PLUGIN_RODATA(coin) static const char g_coinHistoryNeededFmt[] = "Needed: %lu steps";
+PLUGIN_RODATA(coin) static const char g_coinHistoryQueryFmt[] = "Total: %lu";
+PLUGIN_RODATA(coin) static const char g_coinHistoryQueryNone[] = "Not queried this boot";
+PLUGIN_RODATA(coin) static const char g_coinHistoryQueryTimeFmt[] = "%s";
+PLUGIN_RODATA(coin) static const char g_coinHistoryQueryTimeBad[] = "Date unavailable";
 PLUGIN_RODATA(coin) static const char g_coinBucketGroup[] = "Rolling walk buckets";
 PLUGIN_RODATA(coin) static const char g_coinBucketNowFmt[] = "Now: %s";
 PLUGIN_RODATA(coin) static const char g_coinBucketTodayFmt[] = "Today: %u";
@@ -400,6 +414,12 @@ PLUGIN_RODATA(coin) static const char g_clearResultLine[] = "                   
 #define COIN_EXT_TODAY_WORD              6u
 #define COIN_EXT_ACHIEVEMENTS_DISABLED   (1u << 31)
 #define COIN_DAY_HISTORY_COUNT           6u
+#define COIN_RTC_DAY_WAITING              0u
+#define COIN_RTC_DAY_EXACT_NEXT           1u
+#define COIN_RTC_DAY_REJECT               2u
+#define COIN_PREVDAY_NONE                 0u
+#define COIN_PREVDAY_READY                1u
+#define COIN_PREVDAY_RETRY                2u
 #define COIN_DEBUG_BUCKET_X              155u
 #define COIN_DEBUG_BUCKET_NOW_Y          49u
 #define COIN_NEWS_MAX_NOTIFICATIONS    100u
@@ -483,6 +503,7 @@ extern volatile u32 g_coinData[4];
 extern volatile u16 g_coinChange[4];
 extern volatile u32 g_coinProgressiveToday;
 extern volatile CoinStepDiagnostics PLUGIN_coin_stepDiagnostics;
+extern volatile u32 g_coinHistoryQueryTime[2];
 PLUGIN_DATA(coin) u32 g_coinOffset = 0;
 PLUGIN_DATA(coin) u16 g_coinEarnedAppliedCounter = 0;
 PLUGIN_DATA(coin) static u32 g_lastCoins = 0;
@@ -510,6 +531,7 @@ PLUGIN_BSS(coin) static u32 g_coinAchievementSavedMask;
 PLUGIN_BSS(coin) static bool g_coinAchievementsEnabled;
 PLUGIN_BSS(coin) static bool g_coinProgressiveCostEnabled;
 PLUGIN_BSS(coin) static bool g_coinSavePending;
+PLUGIN_BSS(coin) static bool g_coinDayTransitionAuthorized;
 PLUGIN_BSS(coin) static bool g_coinEarnedEventPending;
 PLUGIN_BSS(coin) static u32 g_coinExtendedData[COIN_FILE_EXTENSION_WORDS];
 PLUGIN_BSS(coin) static bool g_coinExtendedDirty;
@@ -536,6 +558,12 @@ PLUGIN_BSS(coin) static u32 g_coinNewsRawRemoved;
 extern bool PLUGIN_coin_AttachHomeMenu(void);
 extern bool PLUGIN_coin_LockHomeState(Handle *processHandleOut);
 extern bool PLUGIN_coin_UnlockHomeState(Handle processHandle);
+extern u32 PLUGIN_coin_RtcDayDecision(void);
+extern bool PLUGIN_coin_RtcDayDecisionPending(void);
+extern bool PLUGIN_coin_RtcExactNextDayPending(void);
+extern u32 PLUGIN_coin_RtcPreviousProgressiveRemainder(void);
+extern u32 PLUGIN_coin_RtcDecisionCalendarStamp(void);
+extern void PLUGIN_coin_ConsumeRtcDayDecision(void);
 extern Result PLUGIN_coin_TriggerAchievement(u32 achievementIndex);
 static void PLUGIN_coin_SyncAchievementSettingToExtendedData(void);
 static void PLUGIN_coin_HandleCoins(void);
@@ -580,6 +608,11 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_LoadMenuSettings(void)
     g_coinChange[3] = g_coinProgressiveCostEnabled ? 1u : 0u;
 }
 
+static u16 PLUGIN_coin_GetTodayWalked(void);
+static void PLUGIN_coin_SetTodayWalked(u16 value);
+static u32 PLUGIN_coin_CurrentCalendarDay(void);
+static u32 PLUGIN_coin_CurrentCalendarStamp(void);
+
 #define PLAYCOIN_HELPERS_EARLY
 #include "playcoin_helpers.c"
 #undef PLAYCOIN_HELPERS_EARLY
@@ -621,7 +654,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_TodayExceedsHomeCounter(void)
         return false;
 
     return currentDay && (!trackedDay || currentDay >= trackedDay) &&
-        PLUGIN_coin_stepDiagnostics.valid == 1u &&
+        (PLUGIN_coin_stepDiagnostics.valid & 1u) != 0u &&
         PLUGIN_coin_GetTodayWalked() > PLUGIN_coin_stepDiagnostics.coinsToday;
 }
 
@@ -656,14 +689,74 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     if (!g_patchedHome)
         (void)PLUGIN_coin_GenerateRandomBytes(&g_coinKey, sizeof(g_coinKey));
 
-    PLUGIN_coin_UpdateDayHistory();
-
     Handle homeProcess = 0;
     if (!PLUGIN_coin_LockHomeState(&homeProcess))
     {
         g_coinSavePending = true;
         return;
     }
+
+    bool otherWork = coinsBin != g_lastCoins || PLUGIN_coin_PendingEarned() ||
+        g_coinSavePending || coinsEverSpent != g_lastEverSpent ||
+        g_coinExtendedDirty || PLUGIN_coin_TodayExceedsHomeCounter();
+    u32 rtcDecision = PLUGIN_coin_RtcDayDecision();
+    u32 currentStamp = PLUGIN_coin_CurrentCalendarStamp();
+    bool rtcDecisionValid =
+        (rtcDecision == COIN_RTC_DAY_EXACT_NEXT || rtcDecision == COIN_RTC_DAY_REJECT) &&
+        currentStamp && PLUGIN_coin_RtcDecisionCalendarStamp() == currentStamp;
+
+    if (rtcDecision != COIN_RTC_DAY_WAITING && !rtcDecisionValid)
+    {
+        PLUGIN_coin_ConsumeRtcDayDecision();
+        rtcDecision = COIN_RTC_DAY_WAITING;
+        if (!otherWork && !PLUGIN_coin_DayHistoryNeedsUpdate())
+        {
+            (void)PLUGIN_coin_UnlockHomeState(homeProcess);
+            return;
+        }
+    }
+
+    if (rtcDecisionValid && !otherWork && !PLUGIN_coin_DayHistoryNeedsUpdate())
+    {
+        PLUGIN_coin_ConsumeRtcDayDecision();
+        (void)PLUGIN_coin_UnlockHomeState(homeProcess);
+        return;
+    }
+
+    u32 previousDayBucket = 0;
+    u32 previousDayWallet = 0;
+    u32 previousDayTracked = 0;
+    u32 previousDayStatus = rtcDecision == COIN_RTC_DAY_EXACT_NEXT ?
+        PLUGIN_coin_PreparePreviousDayCatchup(
+            &previousDayBucket,
+            &previousDayWallet,
+            &previousDayTracked) : COIN_PREVDAY_NONE;
+    if (previousDayStatus == COIN_PREVDAY_RETRY ||
+        (previousDayStatus == COIN_PREVDAY_READY &&
+            !PLUGIN_coin_ApplyPreviousDayCatchup(
+                previousDayWallet,
+                previousDayTracked)))
+    {
+        (void)PLUGIN_coin_UnlockHomeState(homeProcess);
+        return;
+    }
+
+    if (previousDayStatus == COIN_PREVDAY_READY)
+    {
+        if (previousDayBucket > 0xFFFFu)
+            previousDayBucket = 0xFFFFu;
+        if (PLUGIN_coin_GetTodayWalked() != previousDayBucket)
+        {
+            PLUGIN_coin_SetTodayWalked((u16)previousDayBucket);
+            g_coinExtendedDirty = true;
+        }
+    }
+
+    g_coinDayTransitionAuthorized = rtcDecisionValid;
+    PLUGIN_coin_UpdateDayHistory();
+    g_coinDayTransitionAuthorized = false;
+    if (rtcDecision != COIN_RTC_DAY_WAITING)
+        PLUGIN_coin_ConsumeRtcDayDecision();
 
     u32 earnedBatch = PLUGIN_coin_TakeEarnedBatch();
     if (earnedBatch)
@@ -882,11 +975,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SetupCoins(void)
         }
 
         if (!g_coinsFailed)
-        {
             PLUGIN_coin_SyncAchievementSettingToExtendedData();
-            PLUGIN_coin_UpdateDayHistory();
-            PLUGIN_coin_SyncProgressiveToday();
-        }
         if (R_FAILED(COIN_HOST__FSFILE_Close(file)))
             g_coinsFailed = true;
 
@@ -1094,14 +1183,22 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_SetPlayCoins(u16 amount)
 PLUGIN_CODE(coin) static void PLUGIN_coin_OpenPlayCoinzMenuSerialized(void)
 {
     COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
-    PLUGIN_coin_OpenPlayCoinzMenu();
+    if (COIN_HOST__Sleep_TryEnterIo())
+    {
+        PLUGIN_coin_OpenPlayCoinzMenu();
+        COIN_HOST__Sleep_LeaveIo();
+    }
     COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_OpenDebugSerialized(void)
 {
     COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
-    PLUGIN_coin_OpenDebug();
+    if (COIN_HOST__Sleep_TryEnterIo())
+    {
+        PLUGIN_coin_OpenDebug();
+        COIN_HOST__Sleep_LeaveIo();
+    }
     COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
 }
 
@@ -1111,25 +1208,31 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OnBlurTick(u64 delta)
     (void)delta;
     COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
 
-    if (!g_coinsFailed)
+    if (COIN_HOST__Sleep_TryEnterIo())
     {
-        if (!g_patchedHome)
+        if (!g_coinsFailed)
         {
-            PLUGIN_coin_SetupCoins();
-            if (!g_coinsFailed && R_FAILED(PLUGIN_coin_EnsurePackedAssets()))
-                g_coinsFailed = true;
-            g_patchedHome = true;
-        }
-        else
-        {
-            PLUGIN_coin_UpdateDayHistory();
-            if (coinsBin != g_lastCoins || PLUGIN_coin_PendingEarned() ||
-                g_coinSavePending || coinsEverSpent != g_lastEverSpent ||
-                g_coinExtendedDirty || PLUGIN_coin_TodayExceedsHomeCounter())
+            if (!g_patchedHome)
             {
-                PLUGIN_coin_HandleCoins();
+                PLUGIN_coin_SetupCoins();
+                if (!g_coinsFailed && R_FAILED(PLUGIN_coin_EnsurePackedAssets()))
+                    g_coinsFailed = true;
+                g_patchedHome = true;
+            }
+            else
+            {
+                if (coinsBin != g_lastCoins || PLUGIN_coin_PendingEarned() ||
+                    g_coinSavePending || coinsEverSpent != g_lastEverSpent ||
+                    g_coinExtendedDirty || PLUGIN_coin_TodayExceedsHomeCounter() ||
+                    PLUGIN_coin_DayHistoryNeedsUpdate() ||
+                    PLUGIN_coin_RtcDayDecisionPending())
+                {
+                    PLUGIN_coin_HandleCoins();
+                }
             }
         }
+
+        COIN_HOST__Sleep_LeaveIo();
     }
 
     COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);

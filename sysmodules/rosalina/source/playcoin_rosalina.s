@@ -49,3 +49,7 @@ g_coinCalculationValidity:
 .global g_coinInvalidBasePending
 g_coinInvalidBasePending:
     .word 0 @ invalid base pending
+.global g_coinHistoryQueryTime
+g_coinHistoryQueryTime:
+    .word 0 @ last history query time low
+    .word 0 @ last history query time high

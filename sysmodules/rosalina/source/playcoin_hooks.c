@@ -13,6 +13,7 @@ extern u16 g_coinChange[4];
 extern u32 g_coinProgressiveEarnedThisCalc;
 extern u32 g_coinCalculationValidity;
 extern u32 g_coinInvalidBasePending;
+extern volatile u32 g_coinHistoryQueryTime[2];
 extern u32 g_coinOffset;
 extern u16 g_coinEarnedAppliedCounter;
 extern const char g_coinMenuProcessName[];
@@ -160,6 +161,8 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_PatchMenuCallback(
     PLUGIN_coin_stepDiagnostics.historyBoundary = loaderDiagnostics[3];
     PLUGIN_coin_stepDiagnostics.historyTotal = loaderDiagnostics[4];
     PLUGIN_coin_stepDiagnostics.coinsToday = loaderDiagnostics[5];
+    g_coinHistoryQueryTime[0] = loaderDiagnostics[13];
+    g_coinHistoryQueryTime[1] = loaderDiagnostics[14];
 
     *(u32*)g_coinOffset = PLUGIN_coin_Phys(&g_coinDat);
     *(u32*)(g_coinOffset + 4) = PLUGIN_coin_Phys(g_coinData);
@@ -186,6 +189,54 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_AttachHomeMenu(void)
         g_coinMenuProcessName,
         PLUGIN_coin_PatchMenuCallback
     ));
+}
+
+PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcDayDecision(void)
+{
+    if (!g_coinHandoffControl)
+        return 0;
+
+    __dmb();
+    return g_coinHandoffControl[2];
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_RtcDayDecisionPending(void)
+{
+    return PLUGIN_coin_RtcDayDecision() != 0u;
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_RtcExactNextDayPending(void)
+{
+    return PLUGIN_coin_RtcDayDecision() == 1u;
+}
+
+PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcPreviousProgressiveRemainder(void)
+{
+    if (!g_coinHandoffControl || PLUGIN_coin_RtcDayDecision() != 1u)
+        return 0;
+
+    __dmb();
+    return g_coinHandoffControl[3];
+}
+
+PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcDecisionCalendarStamp(void)
+{
+    if (!g_coinHandoffControl)
+        return 0;
+
+    __dmb();
+    return g_coinHandoffControl[4];
+}
+
+PLUGIN_CODE(coin) void PLUGIN_coin_ConsumeRtcDayDecision(void)
+{
+    if (!g_coinHandoffControl)
+        return;
+
+    g_coinHandoffControl[2] = 0;
+    g_coinHandoffControl[3] = 0;
+    g_coinHandoffControl[4] = 0;
+    __dmb();
 }
 
 PLUGIN_CODE(coin) bool PLUGIN_coin_LockHomeState(Handle *processHandleOut)

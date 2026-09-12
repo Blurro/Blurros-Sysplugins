@@ -2203,7 +2203,11 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HardNotificationTickImpl(u64 delta)
 PLUGIN_CODE(coin) static void PLUGIN_coin_HardNotificationTick(u64 delta)
 {
     COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
-    PLUGIN_coin_HardNotificationTickImpl(delta);
+    if (COIN_HOST__Sleep_TryEnterIo())
+    {
+        PLUGIN_coin_HardNotificationTickImpl(delta);
+        COIN_HOST__Sleep_LeaveIo();
+    }
     COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
 }
 

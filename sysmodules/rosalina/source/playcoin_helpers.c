@@ -140,6 +140,226 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTrackedAccounting(void)
         coinsRec = 30000u;
 }
 
+#define COIN_DAY_MS 86400000ULL
+#define COIN_Y2K_DAY_ORDINAL 36525u
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadDayStepTotal(
+    u32 dayOrdinal,
+    u32 *outSteps
+)
+{
+    if (!outSteps || dayOrdinal < COIN_Y2K_DAY_ORDINAL)
+        return false;
+
+    volatile u16 buckets[24];
+    for (u32 i = 0; i < 24u; i++)
+        buckets[i] = 0;
+
+    Handle handle = 0;
+    Result rc = COIN_HOST__srvGetServiceHandle(&handle, g_coinPtmU);
+    if (R_FAILED(rc))
+        return false;
+
+    u64 queryMs = (u64)(dayOrdinal - COIN_Y2K_DAY_ORDINAL) * COIN_DAY_MS;
+    u8 *tls;
+    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tls));
+    u32 *cmdbuf = (u32*)(tls + 0x80);
+    cmdbuf[0] = 0x000B00C2u;
+    cmdbuf[1] = 24u;
+    cmdbuf[2] = (u32)queryMs;
+    cmdbuf[3] = (u32)(queryMs >> 32);
+    cmdbuf[4] = (24u << 4) | 0xCu;
+    cmdbuf[5] = (u32)buckets;
+
+    rc = COIN_HOST__svcSendSyncRequest(handle);
+    if (R_SUCCEEDED(rc))
+        rc = (Result)cmdbuf[1];
+    COIN_HOST__svcCloseHandle(handle);
+    if (R_FAILED(rc))
+        return false;
+
+    u32 total = 0;
+    for (u32 i = 0; i < 24u; i++)
+        total += buckets[i];
+    *outSteps = total;
+    return true;
+}
+
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_ProgressiveCoinsForCompletedDay(u32 steps)
+{
+    u32 coins = 0;
+    u32 cost = 100u;
+    while (steps >= cost && coins < 0xFFFFu)
+    {
+        steps -= cost;
+        coins++;
+        if (coins >= 10u && cost <= 0xFFFFFFFCu)
+            cost += 3u;
+    }
+    return coins;
+}
+
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_CoinsForCompletedDay(u32 steps)
+{
+    return g_coinProgressiveCostEnabled ?
+        PLUGIN_coin_ProgressiveCoinsForCompletedDay(steps) : steps / 100u;
+}
+
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_ProgressiveStepsSpent(u32 coins)
+{
+    u32 spent = 0;
+    u32 cost = 100u;
+    for (u32 coin = 0; coin < coins; coin++)
+    {
+        if (spent > 0xFFFFFFFFu - cost)
+            return 0xFFFFFFFFu;
+
+        spent += cost;
+        if (coin >= 9u && cost <= 0xFFFFFFFCu)
+            cost += 3u;
+    }
+    return spent;
+}
+
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_PreparePreviousDayCatchup(
+    u32 *completedBucketOut,
+    u32 *walletMissingOut,
+    u32 *trackedMissingOut
+)
+{
+    if (!completedBucketOut || !walletMissingOut || !trackedMissingOut)
+        return COIN_PREVDAY_NONE;
+
+    *completedBucketOut = 0;
+    *walletMissingOut = 0;
+    *trackedMissingOut = 0;
+    u32 currentStamp = PLUGIN_coin_CurrentCalendarStamp();
+    if (!PLUGIN_coin_RtcExactNextDayPending() || !currentStamp ||
+        PLUGIN_coin_RtcDecisionCalendarStamp() != currentStamp)
+    {
+        return COIN_PREVDAY_NONE;
+    }
+
+    u32 currentDay = PLUGIN_coin_CurrentCalendarDay();
+    u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
+    u32 savedDay = dayState & COIN_EXT_DAY_VALUE_MASK;
+    if (!currentDay || !savedDay ||
+        (dayState & COIN_EXT_DAY_REBASE_PRESERVE) ||
+        savedDay == COIN_EXT_DAY_VALUE_MASK || currentDay != savedDay + 1u)
+    {
+        return COIN_PREVDAY_NONE;
+    }
+
+    u32 previousDaySteps = 0;
+    if (!PLUGIN_coin_ReadDayStepTotal(savedDay, &previousDaySteps))
+        return COIN_PREVDAY_RETRY;
+
+    u32 walletTarget = PLUGIN_coin_CoinsForCompletedDay(previousDaySteps);
+    u32 progressiveTarget =
+        PLUGIN_coin_ProgressiveCoinsForCompletedDay(previousDaySteps);
+    u32 progressiveClaimed = PLUGIN_coin_GetTodayWalked();
+    u32 walletClaimed = progressiveClaimed;
+    if (!g_coinProgressiveCostEnabled)
+    {
+        u32 nextCost = progressiveClaimed < 10u ?
+            100u : 100u + 3u * (progressiveClaimed - 9u);
+        u32 remainder = PLUGIN_coin_RtcPreviousProgressiveRemainder();
+        u32 spent = PLUGIN_coin_ProgressiveStepsSpent(progressiveClaimed);
+
+        // dont award flat coins if the current state looks wrong
+        if (spent == 0xFFFFFFFFu || remainder >= nextCost ||
+            spent > 0xFFFFFFFFu - remainder)
+        {
+            walletClaimed = walletTarget;
+            progressiveClaimed = progressiveTarget;
+        }
+        else
+        {
+            walletClaimed = (spent + remainder) / 100u;
+        }
+    }
+
+    // the rolling buckets always keep the +3 progression shadow
+    *completedBucketOut = progressiveTarget;
+    *walletMissingOut = walletTarget > walletClaimed ?
+        walletTarget - walletClaimed : 0;
+    *trackedMissingOut = progressiveTarget > progressiveClaimed ?
+        progressiveTarget - progressiveClaimed : 0;
+    return COIN_PREVDAY_READY;
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_WriteVanillaCoinBalance(u16 amount)
+{
+    FS_Path pathData;
+    pathData.type = PATH_BINARY;
+    pathData.size = sizeof(g_gameCoinArchivePath);
+    pathData.data = g_gameCoinArchivePath;
+
+    FS_Archive archive;
+    Result rc = COIN_HOST__FSUSER_OpenArchive(
+        &archive,
+        ARCHIVE_SHARED_EXTDATA,
+        pathData
+    );
+    if (R_FAILED(rc))
+        return false;
+
+    Handle file = 0;
+    rc = COIN_HOST__FSUSER_OpenFile(
+        &file,
+        archive,
+        COIN_HOST__fsMakePath(PATH_ASCII, g_gameCoinPath),
+        FS_OPEN_WRITE,
+        0
+    );
+    if (R_SUCCEEDED(rc))
+    {
+        rc = COIN_HOST__FSFILE_Write(
+            file,
+            NULL,
+            4,
+            &amount,
+            sizeof(amount),
+            FS_WRITE_FLUSH
+        );
+        Result closeRc = COIN_HOST__FSFILE_Close(file);
+        if (R_SUCCEEDED(rc) && R_FAILED(closeRc))
+            rc = closeRc;
+    }
+
+    Result archiveCloseRc = COIN_HOST__FSUSER_CloseArchive(archive);
+    if (R_SUCCEEDED(rc) && R_FAILED(archiveCloseRc))
+        rc = archiveCloseRc;
+    return R_SUCCEEDED(rc);
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ApplyPreviousDayCatchup(
+    u32 walletMissing,
+    u32 trackedMissing
+)
+{
+    u32 room = coinsBin < 30000u ? 30000u - coinsBin : 0u;
+    u32 walletCredited = walletMissing < room ? walletMissing : room;
+    if (!walletCredited && !trackedMissing)
+        return true;
+
+    u32 vanilla = (u32)g_coinDat + walletCredited;
+    u16 newVanilla = (u16)(vanilla > 300u ? 300u : vanilla);
+    if (newVanilla != g_coinDat && !PLUGIN_coin_WriteVanillaCoinBalance(newVanilla))
+        return false;
+
+    coinsBin += walletCredited;
+    g_coinDat = newVanilla;
+    coinsTrue = PLUGIN_coin_SaturatingAdd(coinsTrue, trackedMissing);
+    coinsRec = PLUGIN_coin_SaturatingAdd(coinsRec, trackedMissing);
+    PLUGIN_coin_ClampTrackedAccounting();
+
+    g_coinExtendedDirty = true;
+    if (trackedMissing)
+        g_coinEarnedEventPending = true;
+    return true;
+}
+
 // casino hands us finalized whole-coin values
 PLUGIN_CODE(coin) u32 PLUGIN_coin_GetBlackjackDeposited(void)
 {
@@ -341,6 +561,34 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_CurrentCalendarDay(void)
     return ordinal;
 }
 
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_CurrentCalendarStamp(void)
+{
+    char date[20];
+    if (COIN_HOST__dateTimeToString(date, COIN_HOST__osGetTime(), false) < 10)
+        return 0;
+
+    if (date[4] != '-' || date[7] != '-')
+        return 0;
+    for (u32 i = 0; i < 10u; i++)
+    {
+        if (i == 4u || i == 7u)
+            continue;
+        if (date[i] < '0' || date[i] > '9')
+            return 0;
+    }
+
+    u32 year = (u32)(date[0] - '0') * 1000u +
+        (u32)(date[1] - '0') * 100u +
+        (u32)(date[2] - '0') * 10u +
+        (u32)(date[3] - '0');
+    u32 month = (u32)(date[5] - '0') * 10u + (u32)(date[6] - '0');
+    u32 day = (u32)(date[8] - '0') * 10u + (u32)(date[9] - '0');
+    if (year < 1900u || month < 1u || month > 12u || day < 1u || day > 31u)
+        return 0;
+
+    return year | (month << 16) | (day << 24);
+}
+
 PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
 {
     u32 currentDay = PLUGIN_coin_CurrentCalendarDay();
@@ -359,6 +607,14 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
 
     if (currentDay == lastDay)
         return false;
+
+    // only HandleCoins may authorize an ordinary one-day transition
+    if (!(dayState & COIN_EXT_DAY_REBASE_PRESERVE) &&
+        lastDay != COIN_EXT_DAY_VALUE_MASK && currentDay == lastDay + 1u &&
+        !g_coinDayTransitionAuthorized)
+    {
+        return false;
+    }
 
     // clock went backwards, just move the bucket anchor
     if (currentDay < lastDay)
@@ -405,6 +661,23 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
     // normal rotation lets HOME clamp Today again
     g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] = currentDay;
     g_coinExtendedDirty = true;
+    return true;
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_DayHistoryNeedsUpdate(void)
+{
+    u32 currentDay = PLUGIN_coin_CurrentCalendarDay();
+    u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
+    u32 savedDay = dayState & COIN_EXT_DAY_VALUE_MASK;
+    if (!currentDay || (savedDay && currentDay == savedDay))
+        return false;
+
+    if (savedDay && !(dayState & COIN_EXT_DAY_REBASE_PRESERVE) &&
+        savedDay != COIN_EXT_DAY_VALUE_MASK && currentDay == savedDay + 1u)
+    {
+        return PLUGIN_coin_RtcDayDecisionPending();
+    }
+
     return true;
 }
 
