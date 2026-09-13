@@ -53,21 +53,31 @@ PLUGIN_CODE(coin) void PLUGIN_coin_CheckBalanceAchievements(void)
         coinsTrue >= 30000u && qualified >= 30000u);
 }
 
+PLUGIN_CODE(coin) static void PLUGIN_coin_CheckWalkPeriodAchievements(
+    u32 day,
+    u32 week
+)
+{
+    if (!g_coinAchievementsEnabled)
+        return;
+
+    PLUGIN_coin_TryAchievement(3u, day >= 50u);
+    PLUGIN_coin_TryAchievement(5u, day >= 75u);
+    PLUGIN_coin_TryAchievement(10u, day >= 100u);
+    PLUGIN_coin_TryAchievement(14u, week >= 500u);
+    PLUGIN_coin_TryAchievement(16u, week >= 777u);
+}
+
 PLUGIN_CODE(coin) static void PLUGIN_coin_CheckWalkAchievements(void)
 {
     if (!g_coinAchievementsEnabled)
         return;
 
     PLUGIN_coin_CheckBalanceAchievements();
-
-    u32 today = PLUGIN_coin_GetTodayWalked();
-    PLUGIN_coin_TryAchievement(3u, today >= 50u);
-    PLUGIN_coin_TryAchievement(5u, today >= 75u);
-    PLUGIN_coin_TryAchievement(10u, today >= 100u);
-
-    u32 week = PLUGIN_coin_SevenDayWalked();
-    PLUGIN_coin_TryAchievement(14u, week >= 500u);
-    PLUGIN_coin_TryAchievement(16u, week >= 777u);
+    PLUGIN_coin_CheckWalkPeriodAchievements(
+        PLUGIN_coin_GetTodayWalked(),
+        PLUGIN_coin_SevenDayWalked()
+    );
 }
 
 PLUGIN_CODE(coin) void PLUGIN_coin_CheckSpendAchievements(void)

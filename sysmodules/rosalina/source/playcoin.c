@@ -534,6 +534,9 @@ PLUGIN_BSS(coin) static bool g_coinProgressiveCostEnabled;
 PLUGIN_BSS(coin) static bool g_coinSavePending;
 PLUGIN_BSS(coin) static bool g_coinDayTransitionAuthorized;
 PLUGIN_BSS(coin) static bool g_coinEarnedEventPending;
+PLUGIN_BSS(coin) static bool g_coinCompletedWalkPending;
+PLUGIN_BSS(coin) static u32 g_coinCompletedDay;
+PLUGIN_BSS(coin) static u32 g_coinCompletedWeek;
 PLUGIN_BSS(coin) static u32 g_coinExtendedData[COIN_FILE_EXTENSION_WORDS];
 PLUGIN_BSS(coin) static bool g_coinExtendedDirty;
 PLUGIN_BSS(coin) static bool g_coinBalanceEvent;
@@ -744,6 +747,15 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
 
     if (previousDayStatus == COIN_PREVDAY_READY)
     {
+        u32 completedWeek = previousDayBucket;
+        for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
+            completedWeek += PLUGIN_coin_GetHistoryDay(i);
+
+        // keep the completed window until its save goes through
+        g_coinCompletedDay = previousDayBucket;
+        g_coinCompletedWeek = completedWeek;
+        g_coinCompletedWalkPending = true;
+
         if (previousDayBucket > 0xFFFFu)
             previousDayBucket = 0xFFFFu;
         if (PLUGIN_coin_GetTodayWalked() != previousDayBucket)
@@ -844,8 +856,12 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     }
 
     bool earnedEvent = g_coinEarnedEventPending;
+    bool completedWalkEvent = g_coinCompletedWalkPending;
+    u32 completedDay = g_coinCompletedDay;
+    u32 completedWeek = g_coinCompletedWeek;
     g_coinSavePending = false;
     g_coinEarnedEventPending = false;
+    g_coinCompletedWalkPending = false;
     g_lastCoins = savedWallet;
     g_lastRecommended = savedRecommended;
     g_lastEverSpent = savedLifetimeSpent;
@@ -856,6 +872,8 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     // run achievement checks after the new coin state is saved
     if (earnedEvent)
         PLUGIN_coin_CheckWalkAchievements();
+    if (completedWalkEvent)
+        PLUGIN_coin_CheckWalkPeriodAchievements(completedDay, completedWeek);
     if (spentEvent)
         PLUGIN_coin_CheckSpendAchievements();
     if (balanceEvent)
