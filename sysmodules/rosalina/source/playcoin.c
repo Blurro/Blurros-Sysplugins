@@ -326,6 +326,7 @@ PLUGIN_RODATA(coin) static const char g_coinResultNotFound[] = "Notification not
 PLUGIN_RODATA(coin) static const char g_coinDebugTitle[] = "Play Coin Debug";
 PLUGIN_RODATA(coin) static const char g_coinDebugControls[] = "B: back";
 PLUGIN_RODATA(coin) static const char g_coinDiagWaiting[] = "Waiting for Home Menu coin state...";
+PLUGIN_RODATA(coin) static const char g_coinHistoryWaiting[] = "waiting for query";
 PLUGIN_RODATA(coin) static const char g_coinLiveGroup[] = "HOME day state";
 PLUGIN_RODATA(coin) static const char g_coinHistoryGroup[] = "Accounting";
 PLUGIN_RODATA(coin) static const char g_coinHistoryQueryGroup[] = "Last history query";

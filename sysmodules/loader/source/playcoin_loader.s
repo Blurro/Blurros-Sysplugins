@@ -217,8 +217,8 @@ rtcDayGateContinue:
     mov     pc, r0
 
 rtcOneDay:
-    .word   0x914F0000
-    .word   0x00004E94
+    .word   0x05265C00
+    .word   0x00000000
 
 .balign 4
 .global PLUGIN_coin_homePtr
