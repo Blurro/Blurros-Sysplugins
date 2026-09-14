@@ -43,6 +43,7 @@ PLUGIN_coin_stepDiagnostics:
     .word 0 @ invalid base pending
     .word 0 @ last history query time low
     .word 0 @ last history query time high
+    .word 0 @ preserved Today stays the minimum +3 count
 @ -------- end of rosalina mirroring
 
 @ below is this side only
@@ -302,6 +303,16 @@ afterSplitProgression:
     str     r5, [r8, #40]
     str     r5, [r8, #44]
 afterRtcBoundaryRebase:
+    @ dont let a clock correction restart the +3 curve
+    ldr     r7, [r8, #68]
+    cmp     r7, #0
+    beq     afterPreservedTodayFloor
+    ldr     r7, [r8, #36]
+    ldrh    r5, [r4, #6]
+    cmp     r5, r7
+    strloh  r7, [r4, #6]
+    strlo   r7, [r8, #28]
+afterPreservedTodayFloor:
 
     @ no current pre-hook means no persistent accounting
     tst     r10, #1
@@ -535,6 +546,14 @@ PLUGIN_coin_costPlus3Hook:
 
     ldr     r3, [sp]
     ldr     r12, [sp, #4]
+    ldr     r2, [r0, #68]
+    cmp     r2, #0
+    beq     costNormalFloorReady
+    ldr     r2, [r0, #36]
+    cmp     r12, r2
+    movlo   r12, r2
+    strloh  r2, [r4, #6]
+costNormalFloorReady:
     mov     r2, #0
     mov     r1, #100
     cmp     r12, #10

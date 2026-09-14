@@ -505,6 +505,7 @@ extern volatile u16 g_coinChange[4];
 extern volatile u32 g_coinProgressiveToday;
 extern volatile CoinStepDiagnostics PLUGIN_coin_stepDiagnostics;
 extern volatile u32 g_coinHistoryQueryTime[2];
+extern volatile u32 g_coinProgressiveFloorActive;
 PLUGIN_DATA(coin) u32 g_coinOffset = 0;
 PLUGIN_DATA(coin) u16 g_coinEarnedAppliedCounter = 0;
 PLUGIN_DATA(coin) static u32 g_lastCoins = 0;
@@ -635,6 +636,9 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_SetProgressiveCostEnabled(bool enabled
 
     u32 today = PLUGIN_coin_GetTodayWalked() + PLUGIN_coin_PendingEarned();
     g_coinProgressiveToday = today > 0xFFFFu ? 0xFFFFu : today;
+    g_coinProgressiveFloorActive =
+        (g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] &
+            COIN_EXT_DAY_REBASE_PRESERVE) != 0u;
     g_coinProgressiveCostEnabled = enabled;
     g_coinChange[3] = enabled ? 1u : 0u;
     COIN_HOST__svcFlushEntireDataCache();
@@ -645,6 +649,9 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_SetProgressiveCostEnabled(bool enabled
 PLUGIN_CODE(coin) static void PLUGIN_coin_SyncProgressiveToday(void)
 {
     g_coinProgressiveToday = PLUGIN_coin_GetTodayWalked();
+    g_coinProgressiveFloorActive =
+        (g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] &
+            COIN_EXT_DAY_REBASE_PRESERVE) != 0u;
     COIN_HOST__svcFlushEntireDataCache();
 }
 
@@ -663,13 +670,19 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_TodayExceedsHomeCounter(void)
         PLUGIN_coin_GetTodayWalked() > PLUGIN_coin_stepDiagnostics.coinsToday;
 }
 
-PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTodayToHomeCounter(void)
+PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTodayToHomeCounter(u32 minimumToday)
 {
     if (!PLUGIN_coin_TodayExceedsHomeCounter())
         return;
 
     // HOME can reset later than us, so this may only lower Today
-    PLUGIN_coin_SetTodayWalked((u16)PLUGIN_coin_stepDiagnostics.coinsToday);
+    u32 homeToday = PLUGIN_coin_stepDiagnostics.coinsToday;
+    if (homeToday < minimumToday)
+        homeToday = minimumToday;
+    if (homeToday >= PLUGIN_coin_GetTodayWalked())
+        return;
+
+    PLUGIN_coin_SetTodayWalked((u16)homeToday);
     g_coinExtendedDirty = true;
 }
 
@@ -781,7 +794,9 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     bool gambleEvent = g_coinGambleEvent;
 
     PLUGIN_coin_AddTodayWalked(earnedBatch);
-    PLUGIN_coin_ClampTodayToHomeCounter();
+    // HOME's shared counter can still be one calculation behind here
+    u32 minimumToday = earnedBatch ? PLUGIN_coin_GetTodayWalked() : 0u;
+    PLUGIN_coin_ClampTodayToHomeCounter(minimumToday);
     PLUGIN_coin_SyncProgressiveToday();
 
     if (earnedBatch > 0 || !g_patchedHome)

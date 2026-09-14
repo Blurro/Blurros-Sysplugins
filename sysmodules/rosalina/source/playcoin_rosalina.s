@@ -53,3 +53,6 @@ g_coinInvalidBasePending:
 g_coinHistoryQueryTime:
     .word 0 @ last history query time low
     .word 0 @ last history query time high
+.global g_coinProgressiveFloorActive
+g_coinProgressiveFloorActive:
+    .word 0 @ preserved Today stays the minimum +3 count

@@ -14,6 +14,7 @@ extern u32 g_coinProgressiveEarnedThisCalc;
 extern u32 g_coinCalculationValidity;
 extern u32 g_coinInvalidBasePending;
 extern volatile u32 g_coinHistoryQueryTime[2];
+extern volatile u32 g_coinProgressiveFloorActive;
 extern u32 g_coinOffset;
 extern u16 g_coinEarnedAppliedCounter;
 extern const char g_coinMenuProcessName[];
@@ -163,6 +164,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_PatchMenuCallback(
     PLUGIN_coin_stepDiagnostics.coinsToday = loaderDiagnostics[5];
     g_coinHistoryQueryTime[0] = loaderDiagnostics[13];
     g_coinHistoryQueryTime[1] = loaderDiagnostics[14];
+    g_coinProgressiveFloorActive = loaderDiagnostics[15];
 
     *(u32*)g_coinOffset = PLUGIN_coin_Phys(&g_coinDat);
     *(u32*)(g_coinOffset + 4) = PLUGIN_coin_Phys(g_coinData);
