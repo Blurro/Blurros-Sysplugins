@@ -55,6 +55,7 @@ PLUGIN_coin_handoffControl:
     .word 0                      @ previous progressive step remainder
     .word 0                      @ YYYY | MM << 16 | DD << 24 for this decision
     .word 0                      @ calendar stamp being checked now
+    .word 0                      @ previous HOME coins today
 
 .global PLUGIN_coin_rtcDayGateHook
 .type   PLUGIN_coin_rtcDayGateHook, %function
@@ -108,6 +109,8 @@ rtcClockAhead:
     adr     r0, PLUGIN_coin_handoffControl
     ldr     r1, [r0, #20]
     str     r1, [r0, #16]
+    ldrh    r1, [r4, #6]
+    str     r1, [r0, #24]
     adr     r2, PLUGIN_coin_homePtr
     ldr     r2, [r2]
     ldr     r2, [r2, #8]
@@ -123,6 +126,7 @@ rtcForwardReject:
     str     r1, [r0, #16]
     mov     r1, #0
     str     r1, [r0, #12]
+    str     r1, [r0, #24]
     mov     r1, #2
     str     r1, [r0, #8]
     b       rtcForwardReady
@@ -134,6 +138,7 @@ rtcForwardSuppress:
     str     r1, [r0, #16]
     mov     r1, #0
     str     r1, [r0, #12]
+    str     r1, [r0, #24]
     mov     r1, #2
     str     r1, [r0, #8]
     adr     r0, PLUGIN_coin_homePtr
@@ -159,6 +164,7 @@ rtcClockBehind:
     str     r1, [r0, #16]
     mov     r1, #0
     str     r1, [r0, #12]
+    str     r1, [r0, #24]
     mov     r1, #2
     str     r1, [r0, #8]
     adr     r0, PLUGIN_coin_homePtr
@@ -184,6 +190,7 @@ rtcClockSame:
     str     r1, [r0, #16]
     mov     r1, #0
     str     r1, [r0, #12]
+    str     r1, [r0, #24]
     mov     r1, #2
     str     r1, [r0, #8]
 rtcClockSameReady:

@@ -219,6 +219,15 @@ PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcPreviousProgressiveRemainder(void)
     return g_coinHandoffControl[3];
 }
 
+PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcPreviousCoinsToday(void)
+{
+    if (!g_coinHandoffControl || PLUGIN_coin_RtcDayDecision() != 1u)
+        return 0;
+
+    __dmb();
+    return g_coinHandoffControl[6];
+}
+
 PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcDecisionCalendarStamp(void)
 {
     if (!g_coinHandoffControl)
@@ -236,6 +245,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_ConsumeRtcDayDecision(void)
     g_coinHandoffControl[2] = 0;
     g_coinHandoffControl[3] = 0;
     g_coinHandoffControl[4] = 0;
+    g_coinHandoffControl[6] = 0;
     __dmb();
 }
 

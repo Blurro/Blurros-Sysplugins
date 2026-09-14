@@ -566,6 +566,7 @@ extern u32 PLUGIN_coin_RtcDayDecision(void);
 extern bool PLUGIN_coin_RtcDayDecisionPending(void);
 extern bool PLUGIN_coin_RtcExactNextDayPending(void);
 extern u32 PLUGIN_coin_RtcPreviousProgressiveRemainder(void);
+extern u32 PLUGIN_coin_RtcPreviousCoinsToday(void);
 extern u32 PLUGIN_coin_RtcDecisionCalendarStamp(void);
 extern void PLUGIN_coin_ConsumeRtcDayDecision(void);
 extern Result PLUGIN_coin_TriggerAchievement(u32 achievementIndex);

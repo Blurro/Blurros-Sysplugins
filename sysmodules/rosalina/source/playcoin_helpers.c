@@ -168,7 +168,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadDayStepTotal(
     cmdbuf[1] = 24u;
     cmdbuf[2] = (u32)queryMs;
     cmdbuf[3] = (u32)(queryMs >> 32);
-    cmdbuf[4] = (24u << 4) | 0xCu;
+    cmdbuf[4] = IPC_Desc_Buffer(sizeof(buckets), IPC_BUFFER_W);
     cmdbuf[5] = (u32)buckets;
 
     rc = COIN_HOST__svcSendSyncRequest(handle);
@@ -258,6 +258,9 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_PreparePreviousDayCatchup(
     u32 progressiveTarget =
         PLUGIN_coin_ProgressiveCoinsForCompletedDay(previousDaySteps);
     u32 progressiveClaimed = PLUGIN_coin_GetTodayWalked();
+    u32 homeClaimed = PLUGIN_coin_RtcPreviousCoinsToday();
+    if (progressiveClaimed < homeClaimed)
+        progressiveClaimed = homeClaimed;
     u32 walletClaimed = progressiveClaimed;
     if (!g_coinProgressiveCostEnabled)
     {

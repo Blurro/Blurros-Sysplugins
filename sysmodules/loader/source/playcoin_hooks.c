@@ -792,6 +792,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     mappedHandoffControl[3] = 0;
     mappedHandoffControl[4] = 0;
     mappedHandoffControl[5] = 0;
+    mappedHandoffControl[6] = 0;
     if (!PLUGIN_coin_InitializeHomeMenuState(mappedDat, mappedBin, mappedChange, homePointer))
     {
         PLUGIN_coin_UnmapOwnPage(stateMapBase);

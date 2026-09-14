@@ -6,7 +6,7 @@ cd "$SCRIPT_DIR"
 
 # Independent installed-asset versions. Bump only the asset that changed.
 ICN_VERSION=1
-ACHV_VERSION=2
+ACHV_VERSION=3
 EASYTOP_VERSION=2
 MEDIUMTOP_VERSION=2
 HARDTOP_VERSION=2
