@@ -222,6 +222,8 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_ProgressiveStepsSpent(u32 coins)
 }
 
 PLUGIN_CODE(coin) static u32 PLUGIN_coin_PreparePreviousDayCatchup(
+    u32 currentDay,
+    u32 currentStamp,
     u32 *completedBucketOut,
     u32 *walletMissingOut,
     u32 *trackedMissingOut
@@ -233,14 +235,12 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_PreparePreviousDayCatchup(
     *completedBucketOut = 0;
     *walletMissingOut = 0;
     *trackedMissingOut = 0;
-    u32 currentStamp = PLUGIN_coin_CurrentCalendarStamp();
     if (!PLUGIN_coin_RtcExactNextDayPending() || !currentStamp ||
         PLUGIN_coin_RtcDecisionCalendarStamp() != currentStamp)
     {
         return COIN_PREVDAY_NONE;
     }
 
-    u32 currentDay = PLUGIN_coin_CurrentCalendarDay();
     u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
     u32 savedDay = dayState & COIN_EXT_DAY_VALUE_MASK;
     if (!currentDay || !savedDay ||
@@ -537,47 +537,20 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_IsLeapYear(u32 year)
     return rem == 0u;
 }
 
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_CurrentCalendarDay(void)
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadCalendarNow(u32 *dayOut, u32 *stampOut)
 {
     char date[20];
     if (COIN_HOST__dateTimeToString(date, COIN_HOST__osGetTime(), false) < 10)
-        return 0;
-
-    u32 year = (u32)(date[0] - '0') * 1000u +
-        (u32)(date[1] - '0') * 100u +
-        (u32)(date[2] - '0') * 10u +
-        (u32)(date[3] - '0');
-    u32 month = (u32)(date[5] - '0') * 10u + (u32)(date[6] - '0');
-    u32 day = (u32)(date[8] - '0') * 10u + (u32)(date[9] - '0');
-
-    if (year < 1900u || month < 1u || month > 12u || day < 1u || day > 31u)
-        return 0;
-
-    // one-based days leave zero free for uninitialized state
-    u32 ordinal = 1u;
-    for (u32 y = 1900u; y < year; y++)
-        ordinal += PLUGIN_coin_IsLeapYear(y) ? 366u : 365u;
-
-    ordinal += g_coinMonthStart[month - 1u] + day - 1u;
-    if (month > 2u && PLUGIN_coin_IsLeapYear(year))
-        ordinal++;
-    return ordinal;
-}
-
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_CurrentCalendarStamp(void)
-{
-    char date[20];
-    if (COIN_HOST__dateTimeToString(date, COIN_HOST__osGetTime(), false) < 10)
-        return 0;
+        return false;
 
     if (date[4] != '-' || date[7] != '-')
-        return 0;
+        return false;
     for (u32 i = 0; i < 10u; i++)
     {
         if (i == 4u || i == 7u)
             continue;
         if (date[i] < '0' || date[i] > '9')
-            return 0;
+            return false;
     }
 
     u32 year = (u32)(date[0] - '0') * 1000u +
@@ -587,14 +560,36 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_CurrentCalendarStamp(void)
     u32 month = (u32)(date[5] - '0') * 10u + (u32)(date[6] - '0');
     u32 day = (u32)(date[8] - '0') * 10u + (u32)(date[9] - '0');
     if (year < 1900u || month < 1u || month > 12u || day < 1u || day > 31u)
-        return 0;
+        return false;
 
-    return year | (month << 16) | (day << 24);
+    if (stampOut)
+        *stampOut = year | (month << 16) | (day << 24);
+
+    if (dayOut)
+    {
+        // one-based days leave zero free for uninitialized state
+        u32 ordinal = 1u;
+        for (u32 y = 1900u; y < year; y++)
+            ordinal += PLUGIN_coin_IsLeapYear(y) ? 366u : 365u;
+
+        ordinal += g_coinMonthStart[month - 1u] + day - 1u;
+        if (month > 2u && PLUGIN_coin_IsLeapYear(year))
+            ordinal++;
+        *dayOut = ordinal;
+    }
+
+    return true;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_CurrentCalendarDay(void)
 {
-    u32 currentDay = PLUGIN_coin_CurrentCalendarDay();
+    u32 currentDay = 0;
+    (void)PLUGIN_coin_ReadCalendarNow(&currentDay, NULL);
+    return currentDay;
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistoryForDay(u32 currentDay)
+{
     if (!currentDay)
         return false;
 
@@ -661,15 +656,20 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
         PLUGIN_coin_SetTodayWalked(0);
     }
 
-    // normal rotation lets HOME clamp Today again
+    // normal rotation starts a fresh HOME floor
     g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] = currentDay;
     g_coinExtendedDirty = true;
     return true;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_DayHistoryNeedsUpdate(void)
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
 {
-    u32 currentDay = PLUGIN_coin_CurrentCalendarDay();
+    return PLUGIN_coin_UpdateDayHistoryForDay(PLUGIN_coin_CurrentCalendarDay());
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_DayHistoryNeedsUpdate(u32 currentDay)
+{
     u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
     u32 savedDay = dayState & COIN_EXT_DAY_VALUE_MASK;
     if (!currentDay || (savedDay && currentDay == savedDay))
@@ -684,12 +684,12 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_DayHistoryNeedsUpdate(void)
     return true;
 }
 
-PLUGIN_CODE(coin) static void PLUGIN_coin_AddTodayWalked(u32 earned)
+PLUGIN_CODE(coin) static void PLUGIN_coin_AddTodayWalked(u32 earned, u32 currentDay)
 {
     if (!earned)
         return;
 
-    PLUGIN_coin_UpdateDayHistory();
+    PLUGIN_coin_UpdateDayHistoryForDay(currentDay);
     u32 today = PLUGIN_coin_GetTodayWalked() + earned;
     if (today > 0xFFFFu)
         today = 0xFFFFu;
