@@ -570,6 +570,7 @@ extern bool PLUGIN_coin_RtcExactNextDayPending(void);
 extern u32 PLUGIN_coin_RtcPreviousProgressiveRemainder(void);
 extern u32 PLUGIN_coin_RtcPreviousCoinsToday(void);
 extern u32 PLUGIN_coin_RtcDecisionCalendarStamp(void);
+extern u32 PLUGIN_coin_RtcObservedCalendarStamp(void);
 extern void PLUGIN_coin_ConsumeRtcDayDecision(void);
 extern Result PLUGIN_coin_TriggerAchievement(u32 achievementIndex);
 static void PLUGIN_coin_SyncAchievementSettingToExtendedData(void);
@@ -656,7 +657,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SyncProgressiveToday(void)
     COIN_HOST__svcFlushEntireDataCache();
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_HomeCounterExceedsToday(u32 currentDay)
+PLUGIN_CODE(coin) static bool PLUGIN_coin_HomeCounterExceedsToday(u32 currentDay, u32 currentStamp)
 {
     u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
     u32 trackedDay = dayState & COIN_EXT_DAY_VALUE_MASK;
@@ -665,14 +666,15 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_HomeCounterExceedsToday(u32 currentDay
     if (dayState & COIN_EXT_DAY_REBASE_PRESERVE)
         return false;
 
-    return currentDay && (!trackedDay || currentDay >= trackedDay) &&
+    return currentDay && currentStamp && (!trackedDay || currentDay >= trackedDay) &&
+        PLUGIN_coin_RtcObservedCalendarStamp() == currentStamp &&
         (PLUGIN_coin_stepDiagnostics.valid & 1u) != 0u &&
         PLUGIN_coin_stepDiagnostics.coinsToday > PLUGIN_coin_GetTodayWalked();
 }
 
-PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTodayToHomeCounter(u32 currentDay)
+PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTodayToHomeCounter(u32 currentDay, u32 currentStamp)
 {
-    if (!PLUGIN_coin_HomeCounterExceedsToday(currentDay))
+    if (!PLUGIN_coin_HomeCounterExceedsToday(currentDay, currentStamp))
         return;
 
     // HOME is a floor; only day rotation may lower Today
@@ -718,7 +720,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
 
     bool otherWork = coinsBin != g_lastCoins || PLUGIN_coin_PendingEarned() ||
         g_coinSavePending || coinsEverSpent != g_lastEverSpent ||
-        g_coinExtendedDirty || PLUGIN_coin_HomeCounterExceedsToday(currentDay);
+        g_coinExtendedDirty || PLUGIN_coin_HomeCounterExceedsToday(currentDay, currentStamp);
     bool dayHistoryWork = PLUGIN_coin_DayHistoryNeedsUpdate(currentDay);
     u32 rtcDecision = PLUGIN_coin_RtcDayDecision();
     bool rtcDecisionValid =
@@ -798,7 +800,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     bool gambleEvent = g_coinGambleEvent;
 
     PLUGIN_coin_AddTodayWalked(earnedBatch, currentDay);
-    PLUGIN_coin_ClampTodayToHomeCounter(currentDay);
+    PLUGIN_coin_ClampTodayToHomeCounter(currentDay, currentStamp);
     PLUGIN_coin_SyncProgressiveToday();
 
     if (earnedBatch > 0 || !g_patchedHome)
@@ -1266,8 +1268,9 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OnBlurTick(u64 delta)
                 {
                     g_coinCalendarMaintenanceTicks = 0;
                     u32 currentDay = 0;
-                    (void)PLUGIN_coin_ReadCalendarNow(&currentDay, NULL);
-                    workPending = PLUGIN_coin_HomeCounterExceedsToday(currentDay) ||
+                    u32 currentStamp = 0;
+                    (void)PLUGIN_coin_ReadCalendarNow(&currentDay, &currentStamp);
+                    workPending = PLUGIN_coin_HomeCounterExceedsToday(currentDay, currentStamp) ||
                         PLUGIN_coin_DayHistoryNeedsUpdate(currentDay);
                 }
 

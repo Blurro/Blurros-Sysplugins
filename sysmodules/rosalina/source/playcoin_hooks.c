@@ -239,6 +239,15 @@ PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcDecisionCalendarStamp(void)
     return g_coinHandoffControl[4];
 }
 
+PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcObservedCalendarStamp(void)
+{
+    if (!g_coinHandoffControl)
+        return 0;
+
+    __dmb();
+    return g_coinHandoffControl[5];
+}
+
 PLUGIN_CODE(coin) void PLUGIN_coin_ConsumeRtcDayDecision(void)
 {
     if (!g_coinHandoffControl)
