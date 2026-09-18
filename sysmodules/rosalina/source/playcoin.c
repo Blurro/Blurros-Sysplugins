@@ -190,6 +190,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)RecursiveLock_Unlock,
     (void*)PLUGIN_blur_SleepTryEnterIo,
     (void*)PLUGIN_blur_SleepLeaveIo,
+    (void*)PLUGIN_MENU_RemoveItem,
 };
 
 #define COIN_BLUR__AddTickFunc            ((bool(*)(BlurTickFunc,s64))pluginTable_coin[0])
@@ -237,6 +238,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_HOST__RecursiveLock_Unlock    ((void(*)(RecursiveLock*))pluginTable_coin[46])
 #define COIN_HOST__Sleep_TryEnterIo        ((bool(*)(void))pluginTable_coin[47])
 #define COIN_HOST__Sleep_LeaveIo           ((void(*)(void))pluginTable_coin[48])
+#define COIN_MENU__RemoveItem             ((bool(*)(PluginMenuRegistration*))pluginTable_coin[49])
 #define COIN_HOST__OperateOnProcessByName  ((Result(*)(const char*,OperateOnProcessCb))pluginTable_coin[1])
 #define COIN_HOST__svcFlushEntireDataCache ((void(*)(void))pluginTable_coin[11])
 #define COIN_HOST__svcInvalidateEntireInstructionCache ((void(*)(void))pluginTable_coin[12])
@@ -517,6 +519,7 @@ PLUGIN_DATA(coin) static bool g_patchedHome = false;
 
 // NEWS LED address comes from OperateOnProcessByName's 0x00100000 mapping
 PLUGIN_BSS(coin) static PluginMenuRegistration g_coinMenuRegistration;
+PLUGIN_BSS(coin) static bool g_coinMenuRegistered;
 PLUGIN_BSS(coin) static BlurFeatureRegistration g_coinBlurFeatureRegistration;
 PLUGIN_BSS(coin) static RecursiveLock g_coinStateLock;
 PLUGIN_BSS(coin) static u32 g_coinNewsLedAddress;
@@ -562,6 +565,7 @@ PLUGIN_BSS(coin) static u32 g_coinNewsRawRemoved;
 #define coinsSpent     g_coinChange[1]
 
 extern bool PLUGIN_coin_AttachHomeMenu(void);
+PLUGIN_CODE(coin) static void PLUGIN_coin_OnBlurTick(u64 delta);
 extern bool PLUGIN_coin_LockHomeState(Handle *processHandleOut);
 extern bool PLUGIN_coin_UnlockHomeState(Handle processHandle);
 extern u32 PLUGIN_coin_RtcDayDecision(void);
@@ -904,6 +908,15 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     // coins.bin: old 0x20 base, 0x20 extension, optional 8-byte secret mask
 }
 
+PLUGIN_CODE(coin) static void PLUGIN_coin_DisableForMissingLoader(void)
+{
+    g_coinsFailed = true;
+    (void)COIN_BLUR__RemoveTickFunc(PLUGIN_coin_OnBlurTick);
+
+    if (g_coinMenuRegistered && COIN_MENU__RemoveItem(&g_coinMenuRegistration))
+        g_coinMenuRegistered = false;
+}
+
 PLUGIN_CODE(coin) static void PLUGIN_coin_SetupCoins(void)
 {
     // Loader already seeded vanilla state if coins.bin was bad
@@ -1021,7 +1034,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SetupCoins(void)
         if (!g_coinsFailed &&
             (g_coinOffset <= 0x100000u || !PLUGIN_coin_AttachHomeMenu()))
         {
-            g_coinsFailed = true;
+            PLUGIN_coin_DisableForMissingLoader();
         }
     }
     else
@@ -1324,7 +1337,7 @@ PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
     if (!COIN_BLUR__AddTickFunc || !COIN_BLUR__RemoveTickFunc ||
         !COIN_BLUR__AddFeatureItem ||
         !COIN_BLUR__DrawFeatureFrame || !COIN_MENU__AddItem ||
-        !COIN_MENU__OpenPluginFile || !COIN_MENU__UnpackLz10File ||
+        !COIN_MENU__RemoveItem || !COIN_MENU__OpenPluginFile || !COIN_MENU__UnpackLz10File ||
         !COIN_MENU__ClosePluginFile || !COIN_MENU__LoadData ||
         !COIN_MENU__SaveData || !COIN_HOST__dateTimeToString)
     {
@@ -1354,6 +1367,7 @@ PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
             PLUGIN_coin_OpenPlayCoinzMenuSerialized,
             RGB565(31, 63, 20)))
     {
+        g_coinMenuRegistered = true;
         PLUGIN_coin_RemoveBuiltInMenuItem();
     }
 

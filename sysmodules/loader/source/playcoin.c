@@ -1,5 +1,6 @@
 #include <3ds.h>
 #include "memory.h"
+#include "sysplugin_menu.h"
 
 #ifdef __INTELLISENSE__
 #define __attribute__(x)
@@ -25,11 +26,10 @@
 #define COIN_BLACKJACK_COUNTER_MAX       30000u
 #define COIN_ACHIEVEMENT_MASK            0x0003FFFFu
 
-extern u32 coin_loader_home_patch;
-extern u32 coin_loader_createcodeset_call;
-extern u32 coin_loader_createprocess_call;
-extern bool PLUGIN_coin_InstallHooks(void);
 extern Result PLUGIN_coin_svcSendSyncRequest(Handle handle);
+extern bool PLUGIN_coin_PrepareHomeMenu(PluginMenuLoaderContext *context);
+extern bool PLUGIN_coin_PrepareNewsList(PluginMenuLoaderContext *context);
+extern void PLUGIN_coin_NewsListProcessCreated(PluginMenuLoaderContext *context);
 
 PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)FSUSER_OpenArchive,
@@ -38,10 +38,11 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)FSFILE_Read,
     (void*)FSFILE_Close,
     (void*)fsMakePath,
-    (void*)&coin_loader_home_patch,
-    (void*)&coin_loader_createcodeset_call,
-    (void*)&coin_loader_createprocess_call,
     (void*)FSFILE_GetSize,
+    (void*)PLUGIN_MENU_RegisterTitlePatch,
+    (void*)PLUGIN_MENU_UnregisterTitlePatch,
+    (void*)PLUGIN_MENU_RegisterHomePatch,
+    (void*)PLUGIN_MENU_UnregisterHomePatch,
 };
 
 #define COIN_HOST__FSUSER_OpenArchive  ((Result(*)(FS_Archive*,FS_ArchiveID,FS_Path))pluginTable_coin[0])
@@ -50,10 +51,37 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_HOST__FSFILE_Read         ((Result(*)(Handle,u32*,u64,void*,u32))pluginTable_coin[3])
 #define COIN_HOST__FSFILE_Close        ((Result(*)(Handle))pluginTable_coin[4])
 #define COIN_HOST__fsMakePath          ((FS_Path(*)(FS_PathType,const void*))pluginTable_coin[5])
-#define COIN_HOST__FSFILE_GetSize      ((Result(*)(Handle,u64*))pluginTable_coin[9])
+#define COIN_HOST__FSFILE_GetSize      ((Result(*)(Handle,u64*))pluginTable_coin[6])
+#define COIN_MENU__RegisterTitlePatch  ((bool(*)(PluginMenuLoaderTitlePatch*))pluginTable_coin[7])
+#define COIN_MENU__UnregisterTitlePatch ((bool(*)(PluginMenuLoaderTitlePatch*))pluginTable_coin[8])
+#define COIN_MENU__RegisterHomePatch   ((bool(*)(PluginMenuLoaderHomePatch*))pluginTable_coin[9])
+#define COIN_MENU__UnregisterHomePatch ((bool(*)(PluginMenuLoaderHomePatch*))pluginTable_coin[10])
 
 PLUGIN_RODATA(coin) static const char g_coinFilePath[] = "/luma/coins.bin";
 PLUGIN_RODATA(coin) static const char g_gameCoinPath[] = "/gamecoin.dat";
+PLUGIN_RODATA(coin) static const u64 g_coinNewsListTitleIds[] = {
+    0x0004003000008E02ULL,
+    0x0004003000009702ULL,
+    0x000400300000A002ULL,
+    0x000400300000A802ULL,
+    0x000400300000B002ULL,
+    0x000400300000B802ULL,
+};
+
+PLUGIN_DATA(coin) static PluginMenuLoaderHomePatch g_coinHomePatch = {
+    .prepare = PLUGIN_coin_PrepareHomeMenu,
+    .next = NULL,
+};
+
+PLUGIN_DATA(coin) static PluginMenuLoaderTitlePatch g_coinNewsListPatch = {
+    .titleIds = g_coinNewsListTitleIds,
+    .titleIdCount = sizeof(g_coinNewsListTitleIds) / sizeof(g_coinNewsListTitleIds[0]),
+    .prepare = PLUGIN_coin_PrepareNewsList,
+    .processCreated = PLUGIN_coin_NewsListProcessCreated,
+    .loaderFinished = NULL,
+    .next = NULL,
+    .menuEpoch = 0,
+};
 PLUGIN_RODATA(coin) static const u32 g_gameCoinArchivePath[3] = {
     MEDIATYPE_NAND,
     0xF000000Bu,
@@ -513,5 +541,20 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
 
 PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
 {
-    return PLUGIN_coin_InstallHooks();
+    if (!COIN_MENU__RegisterTitlePatch || !COIN_MENU__UnregisterTitlePatch ||
+        !COIN_MENU__RegisterHomePatch || !COIN_MENU__UnregisterHomePatch)
+    {
+        return false;
+    }
+
+    if (!COIN_MENU__RegisterHomePatch(&g_coinHomePatch))
+        return false;
+
+    if (!COIN_MENU__RegisterTitlePatch(&g_coinNewsListPatch))
+    {
+        (void)COIN_MENU__UnregisterHomePatch(&g_coinHomePatch);
+        return false;
+    }
+
+    return true;
 }

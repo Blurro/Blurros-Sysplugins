@@ -62,7 +62,7 @@ ROSALINA_PLUGIN_CONFIG=(
 
 LOADER_PLUGIN_CONFIG=(
     "CFGN|cfgn_l|"
-    "coin|coin_l|"
+    "coin|coin_l|MENU"
 )
 
 # Optional metadata is appended to one single-entry .3nx after its normal 16-byte body padding.
@@ -73,10 +73,10 @@ LOADER_PLUGIN_CONFIG=(
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
     "blur_r|version103.bin"
-    "coin_r|version106.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "coin_r|version107.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "powr_r|version101.bin"
     "hello_r|version101.bin"
-    "coin_l|version106.bin"
+    "coin_l|version107.bin"
     "cfgn_l|version101.bin"
 )
 

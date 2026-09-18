@@ -1,5 +1,6 @@
 #include <3ds.h>
 #include "memory.h"
+#include "sysplugin_menu.h"
 
 #ifdef __INTELLISENSE__
 #define __attribute__(x)
@@ -14,9 +15,6 @@
 #define NOP 0xE1A00000u
 
 extern void *pluginTable_coin[];
-#define COIN_HOST__loaderHomePatch          ((u32)pluginTable_coin[6])
-#define COIN_HOST__loaderCreateCodeSetPatch ((u32)pluginTable_coin[7])
-#define COIN_HOST__loaderCreateProcessPatch ((u32)pluginTable_coin[8])
 #define COIN_HOST__FSUSER_OpenArchive       ((Result(*)(FS_Archive*,FS_ArchiveID,FS_Path))pluginTable_coin[0])
 #define COIN_HOST__FSUSER_CloseArchive      ((Result(*)(FS_Archive))pluginTable_coin[1])
 #define COIN_HOST__FSUSER_OpenFile          ((Result(*)(Handle*,FS_Archive,FS_Path,u32,u32))pluginTable_coin[2])
@@ -24,12 +22,6 @@ extern void *pluginTable_coin[];
 #define COIN_HOST__FSFILE_Close             ((Result(*)(Handle))pluginTable_coin[4])
 #define COIN_HOST__fsMakePath               ((FS_Path(*)(FS_PathType,const void*))pluginTable_coin[5])
 
-#define COIN_NEWSLIST_TITLE_ID_JPN 0x0004003000008E02ULL
-#define COIN_NEWSLIST_TITLE_ID_USA 0x0004003000009702ULL
-#define COIN_NEWSLIST_TITLE_ID_EUR 0x000400300000A002ULL
-#define COIN_NEWSLIST_TITLE_ID_CHN 0x000400300000A802ULL
-#define COIN_NEWSLIST_TITLE_ID_KOR 0x000400300000B002ULL
-#define COIN_NEWSLIST_TITLE_ID_TWN 0x000400300000B802ULL
 #define COIN_NEWSLIST_ICON_PACK_SIZE 0x4800u
 #define COIN_ASSET_VERSION_MAGIC 0x56584E33u
 #define COIN_NEWSLIST_ICON_ALLOC_SIZE 0x5000u
@@ -46,16 +38,12 @@ extern u16 PLUGIN_coin_change[4];
 extern u32 PLUGIN_coin_homePtr;
 extern u32 PLUGIN_coin_handoffControl;
 extern u32 PLUGIN_coin_homeUIReturn;
-extern u32 PLUGIN_coin_loaderReturn;
-extern void PLUGIN_coin_LoaderPatchCodeHook(void);
 extern void PLUGIN_coin_homeLoaderPatch(void);
 extern void PLUGIN_coin_homeLoaderUIHook(void);
 extern void PLUGIN_coin_preCoinHook(void);
 extern void PLUGIN_coin_rtcDayGateHook(void);
 extern void PLUGIN_coin_historyDiagHook(void);
 extern void PLUGIN_coin_costPlus3Hook(void);
-extern void PLUGIN_coin_CreateCodeSetHook(void);
-extern void PLUGIN_coin_CreateProcessHook(void);
 extern void PLUGIN_coin_NewslistIconHook(void);
 extern u32 PLUGIN_coin_newslistIconBaseWord;
 extern u32 PLUGIN_coin_newslistIconOriginalWord;
@@ -64,9 +52,6 @@ extern void PLUGIN_coin_HomeNewsIconHook(void);
 extern u32 PLUGIN_coin_homeNewsIconOriginalWord;
 extern u32 PLUGIN_coin_homeNewsIconResumeWord;
 
-PLUGIN_DATA(coin) static u32 g_coinCreateCodeSetReturn;
-PLUGIN_DATA(coin) static u32 g_coinCreateProcessReturn;
-PLUGIN_DATA(coin) static bool g_coinNewslistPending;
 PLUGIN_DATA(coin) static u32 g_coinNewslistIconBase;
 
 extern Result PLUGIN_coin_svcQueryMemory(MemInfo *memInfo, PageInfo *pageInfo, u32 addr);
@@ -101,7 +86,7 @@ __asm__(
     ".global PLUGIN_coin_HomeNewsIconHook\n"
     ".type PLUGIN_coin_HomeNewsIconHook, %function\n"
     "PLUGIN_coin_HomeNewsIconHook:\n"
-    // Home Menu uses the same notification icon ABI as newslist
+    // Home Menu uses the same notification icon ABI as the NewsList applet
     "push {r0, r2}\n"
     "ldr r12, [r1]\n"
     "adr lr, PLUGIN_coin_homeNewsCoinLowWord\n"
@@ -156,67 +141,7 @@ __asm__(
 __asm__(
     ".section .plugin_coin,\"ax\",%progbits\n"
     ".balign 4\n"
-    ".global PLUGIN_coin_loaderReturn\n"
-    "PLUGIN_coin_loaderReturn:\n"
-    ".word 0\n"
-
-    ".global PLUGIN_coin_LoaderPatchCodeHook\n"
-    ".type PLUGIN_coin_LoaderPatchCodeHook, %function\n"
-    "PLUGIN_coin_LoaderPatchCodeHook:\n"
-    "ldr r2, =0xE3A00000\n"
-    "str r2, [r7, r3]\n"
-    "add r3, r7, r3\n"
-    "ldr r2, =0xE12FFF1E\n"
-    "str r2, [r3, #4]\n"
-    "push {r0-r12, lr}\n"
-    "mov r0, r7\n"
-    "mov r1, r4\n"
-    "bl PLUGIN_coin_PatchHomeMenu\n"
-    "pop {r0-r12, lr}\n"
-    "adr r12, PLUGIN_coin_loaderReturn\n"
-    "ldr pc, [r12]\n"
-
-    ".global PLUGIN_coin_CreateCodeSetHook\n"
-    ".type PLUGIN_coin_CreateCodeSetHook, %function\n"
-    "PLUGIN_coin_CreateCodeSetHook:\n"
-    // r0=codeset, r1=header, r2/r3=text/ro, stack=data
-    "push {r0-r3, lr}\n"
-    "mov r0, r1\n"
-    "mov r1, r2\n"
-    "bl PLUGIN_coin_PreCreateCodeSet\n"
-    "pop {r0-r3, lr}\n"
-    // inline the tiny svcCreateCodeSet wrapper
-    "push {r0}\n"
-    "ldr r0, [sp, #4]\n"
-    "svc 0x73\n"
-    "ldr r2, [sp]\n"
-    "str r1, [r2]\n"
-    "add sp, sp, #4\n"
-    // replay cmp r0,#0 so the next bge sees the old flags
-    "cmp r0, #0\n"
-    "ldr r12, =g_coinCreateCodeSetReturn\n"
-    "ldr pc, [r12]\n"
-
-    ".global PLUGIN_coin_CreateProcessHook\n"
-    ".type PLUGIN_coin_CreateProcessHook, %function\n"
-    "PLUGIN_coin_CreateProcessHook:\n"
-    // tiny svcCreateProcess wrapper
-    "push {r0}\n"
-    "svc 0x75\n"
-    "ldr r2, [sp]\n"
-    "str r1, [r2]\n"
-    "add sp, sp, #4\n"
-    // keep the host-visible result/output regs intact
-    "push {r0-r3, lr}\n"
-    "mov r1, r2\n"
-    "bl PLUGIN_coin_PostCreateProcess\n"
-    "pop {r0-r3, lr}\n"
-    // replay the old mov r5,r0
-    "mov r5, r0\n"
-    "ldr r12, =g_coinCreateProcessReturn\n"
-    "ldr pc, [r12]\n"
-
-    // runs through newslist's K11 alias, dont touch Loader VA data here
+    // runs through the NewsList applet's K11 alias, dont touch Loader VA data here
     ".global PLUGIN_coin_newslistIconBaseWord\n"
     "PLUGIN_coin_newslistIconBaseWord:\n"
     ".word 0\n"
@@ -858,6 +783,17 @@ PLUGIN_RODATA(coin) static const u32 g_coinNewslistResolverPrefix[24] = {
     0xE28DDD82u, 0xE2801D12u, 0xE1A00007u, 0xE8BD41F0u,
 };
 
+PLUGIN_CODE(coin) bool PLUGIN_coin_PrepareHomeMenu(
+    PluginMenuLoaderContext *context
+)
+{
+    if (!context || !context->code || !context->textSize)
+        return false;
+
+    PLUGIN_coin_PatchHomeMenu(context->code, context->textSize);
+    return true;
+}
+
 PLUGIN_CODE(coin) static bool PLUGIN_coin_MatchNewslistIconCall(
     volatile const u32 *code,
     u32 wordCount,
@@ -996,29 +932,22 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_SetNewslistHookWords(
         );
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_IsNewslistTitleId(u64 programId)
-{
-    // newslist is the regional Notifications applet
-    return programId == COIN_NEWSLIST_TITLE_ID_JPN ||
-           programId == COIN_NEWSLIST_TITLE_ID_USA ||
-           programId == COIN_NEWSLIST_TITLE_ID_EUR ||
-           programId == COIN_NEWSLIST_TITLE_ID_CHN ||
-           programId == COIN_NEWSLIST_TITLE_ID_KOR ||
-           programId == COIN_NEWSLIST_TITLE_ID_TWN;
-}
-
-PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
-    CodeSetHeader *header,
-    volatile u32 *text
+PLUGIN_CODE(coin) bool PLUGIN_coin_PrepareNewsList(
+    PluginMenuLoaderContext *context
 )
 {
-    // clear only the pending handoff, not an already-live hook
-    g_coinNewslistPending = false;
-    g_coinNewslistIconBase = 0;
+    CodeSetHeader *header;
+    volatile u32 *text;
 
-    if (!header || !PLUGIN_coin_IsNewslistTitleId(header->program_id) ||
+    g_coinNewslistIconBase = 0;
+    if (!context || !context->codeSet || !context->code ||
         !PLUGIN_coin_AchievementsEnabledForLoader())
-        return;
+    {
+        return false;
+    }
+
+    header = context->codeSet;
+    text = (volatile u32 *)context->code;
 
     u32 hookAddress = 0;
     u32 originalTarget = 0;
@@ -1028,29 +957,29 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
             &hookAddress,
             &originalTarget))
     {
-        return;
+        return false;
     }
 
     if (header->rw_size_total > 0xFFFFFFFFu / 0x1000u ||
         header->rw_size_total > 0xFFFFFFFFu - COIN_NEWSLIST_ICON_PAGES)
     {
-        return;
+        return false;
     }
 
     u32 textSize = header->text_size_total * 0x1000u;
     if (hookAddress < header->text_addr ||
         hookAddress - header->text_addr > textSize - 2u * sizeof(u32))
     {
-        return;
+        return false;
     }
 
     u32 rwSize = header->rw_size_total * 0x1000u;
     if (header->rw_addr > 0xFFFFFFFFu - rwSize)
-        return;
+        return false;
 
     u32 iconBase = header->rw_addr + rwSize;
     if (!iconBase || iconBase > 0xFFFFFFFFu - COIN_NEWSLIST_ICON_ALLOC_SIZE)
-        return;
+        return false;
 
     // patch the writable CodeSet source before svcCreateCodeSet makes RX text
     u32 hookIndex = (hookAddress - header->text_addr) / sizeof(u32);
@@ -1060,7 +989,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
         decodedTarget != originalTarget ||
         site[1] != 0xE3A00040u)
     {
-        return;
+        return false;
     }
 
     // zero iconBase is the safe Nintendo-resolver fallback until assets are loaded
@@ -1069,17 +998,17 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PreCreateCodeSet(
             originalTarget,
             hookAddress + 2u * sizeof(u32)))
     {
-        return;
+        return false;
     }
 
     site[0] = 0xE51FF004u;
     site[1] = PLUGIN_coin_Phys(PLUGIN_coin_NewslistIconHook);
     PLUGIN_coin_svcFlushEntireDataCache();
 
-    // these extra icon pages belong to newslist itself
+    // these extra icon pages belong to the NewsList applet
     header->rw_size_total += COIN_NEWSLIST_ICON_PAGES;
     g_coinNewslistIconBase = iconBase;
-    g_coinNewslistPending = true;
+    return true;
 }
 
 PLUGIN_CODE(coin) static bool PLUGIN_coin_LoadNewslistIcons(Handle process, u32 iconBase)
@@ -1136,22 +1065,18 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_LoadNewslistIcons(Handle process, u32 
     return ok;
 }
 
-PLUGIN_CODE(coin) void PLUGIN_coin_PostCreateProcess(Result createResult, Handle *outProcessHandle)
+PLUGIN_CODE(coin) void PLUGIN_coin_NewsListProcessCreated(
+    PluginMenuLoaderContext *context
+)
 {
-    if (!g_coinNewslistPending)
-        return;
-
-    g_coinNewslistPending = false;
     u32 iconBase = g_coinNewslistIconBase;
     g_coinNewslistIconBase = 0;
 
-    if (R_FAILED(createResult) || !outProcessHandle || !*outProcessHandle || !iconBase)
+    if (!context || !context->process || !iconBase)
         return;
 
-    Handle process = *outProcessHandle;
-
     // process isnt started yet, fill its icon pages before publishing iconBase
-    if (PLUGIN_coin_LoadNewslistIcons(process, iconBase))
+    if (PLUGIN_coin_LoadNewslistIcons(context->process, iconBase))
     {
         (void)PLUGIN_coin_WriteOwnCodeWord(
             (u32)&PLUGIN_coin_newslistIconBaseWord,
@@ -1160,131 +1085,3 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PostCreateProcess(Result createResult, Handle
     }
 }
 
-PLUGIN_CODE(coin) static volatile u32 *PLUGIN_coin_FindCreateCodeSetPatch(
-    volatile u32 *anchor,
-    u32 maxWords
-)
-{
-    volatile u32 *found = NULL;
-
-    for (u32 i = 0; i + 2u < maxWords; i++)
-    {
-        volatile u32 *p = anchor + i;
-        if ((p[0] & 0xFF000000u) == 0xEB000000u &&
-            p[1] == 0xE3500000u &&
-            (p[2] & 0xFF000000u) == 0xAA000000u)
-        {
-            if (found)
-                return NULL;
-            found = p;
-        }
-    }
-
-    return found;
-}
-
-PLUGIN_CODE(coin) static volatile u32 *PLUGIN_coin_FindCreateProcessPatch(
-    volatile u32 *anchor,
-    u32 maxWords
-)
-{
-    volatile u32 *found = NULL;
-
-    for (u32 i = 0; i + 3u < maxWords; i++)
-    {
-        volatile u32 *p = anchor + i;
-        if ((p[0] & 0xFF000000u) == 0xEB000000u &&
-            p[1] == 0xE1A05000u &&
-            (p[2] & 0xFFFFF000u) == 0xE59D0000u &&
-            (p[3] & 0xFF000000u) == 0xEB000000u)
-        {
-            if (found)
-                return NULL;
-            found = p;
-        }
-    }
-
-    return found;
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_InstallAllLoaderHooks(void)
-{
-    u32 returnMapBase = 0;
-    u32 returnMapped = 0;
-    u32 homeMapBase = 0;
-    u32 homeAddress = 0;
-    u32 codeSetMapBase = 0;
-    u32 codeSetAddress = 0;
-    u32 processMapBase = 0;
-    u32 processAddress = 0;
-    bool ok = false;
-
-    // markers land on the expression, scan forward for the actual BL shape
-    if (!PLUGIN_coin_MapOwnPage((u32)&PLUGIN_coin_loaderReturn, &returnMapBase, &returnMapped))
-        goto done;
-    if (!PLUGIN_coin_MapOwnPage(COIN_HOST__loaderHomePatch, &homeMapBase, &homeAddress))
-        goto done;
-    if (!PLUGIN_coin_MapOwnPage(COIN_HOST__loaderCreateCodeSetPatch, &codeSetMapBase, &codeSetAddress))
-        goto done;
-    if (!PLUGIN_coin_MapOwnPage(COIN_HOST__loaderCreateProcessPatch, &processMapBase, &processAddress))
-        goto done;
-
-    volatile u32 *home = (volatile u32*)homeAddress;
-
-    u32 codeSetWords = (0x1000u - (COIN_HOST__loaderCreateCodeSetPatch & 0xFFFu)) / 4u;
-    if (codeSetWords > 0x40u)
-        codeSetWords = 0x40u;
-    volatile u32 *codeSet = PLUGIN_coin_FindCreateCodeSetPatch(
-        (volatile u32*)codeSetAddress,
-        codeSetWords
-    );
-
-    u32 processWords = (0x1000u - (COIN_HOST__loaderCreateProcessPatch & 0xFFFu)) / 4u;
-    if (processWords > 0x40u)
-        processWords = 0x40u;
-    volatile u32 *process = PLUGIN_coin_FindCreateProcessPatch(
-        (volatile u32*)processAddress,
-        processWords
-    );
-
-    if ((home[0] & 0xFFFFF000u) != 0xE59F2000u ||
-        home[1] != 0xE7872003u ||
-        !codeSet || !process)
-    {
-        goto done;
-    }
-
-    u32 codeSetHost = COIN_HOST__loaderCreateCodeSetPatch +
-        ((u32)codeSet - codeSetAddress);
-    u32 processHost = COIN_HOST__loaderCreateProcessPatch +
-        ((u32)process - processAddress);
-
-    *(u32*)returnMapped = COIN_HOST__loaderHomePatch + 0x2Cu;
-    g_coinCreateCodeSetReturn = codeSetHost + 8u;
-    g_coinCreateProcessReturn = processHost + 8u;
-
-    home[0] = 0xE51FF004u;
-    home[1] = (u32)PLUGIN_coin_LoaderPatchCodeHook;
-
-    codeSet[0] = 0xE51FF004u;
-    codeSet[1] = (u32)PLUGIN_coin_CreateCodeSetHook;
-
-    process[0] = 0xE51FF004u;
-    process[1] = (u32)PLUGIN_coin_CreateProcessHook;
-
-    PLUGIN_coin_svcFlushEntireDataCache();
-    PLUGIN_coin_svcInvalidateEntireInstructionCache();
-    ok = true;
-
-done:
-    PLUGIN_coin_UnmapOwnPage(processMapBase);
-    PLUGIN_coin_UnmapOwnPage(codeSetMapBase);
-    PLUGIN_coin_UnmapOwnPage(homeMapBase);
-    PLUGIN_coin_UnmapOwnPage(returnMapBase);
-    return ok;
-}
-
-PLUGIN_CODE(coin) bool PLUGIN_coin_InstallHooks(void)
-{
-    return PLUGIN_coin_InstallAllLoaderHooks();
-}
