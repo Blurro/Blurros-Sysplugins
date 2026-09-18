@@ -68,7 +68,7 @@ Side note: Do not use Play Coin setters outside of the one provided by this mod!
 * Custom notifications for... *secrets* - with Club Penguin inspired difficulty tiers
 * WIP Blackjack casino with gambling lol (walking to the next casino required if you get a backoff)
 
-PlayCoinz patches Home Menu, News, & Notifications directly, with menus and extra features provided through Rosalina.
+PlayCoinz's Loader half patches Home Menu and the NewsList applet through MENU's Loader-side patch registration API. Its Rosalina half handles the menus, coin accounting, and NEWS notifications / LED patches.
 
 Features art by [@AnasAbdin](https://x.com/AnasAbdin) for *\*secret\** top-screen images, huge thanks to him for giving permission to use them!
 
@@ -83,22 +83,24 @@ Features art by [@AnasAbdin](https://x.com/AnasAbdin) for *\*secret\** top-scree
 - `sysmodules/rosalina/source/playcoin_secrets.c`
 - `sysmodules/rosalina/source/playcoin_rosalina.s`
 
-**Markers in:**
-- `sysmodules/loader/source/loader.c`
-- `sysmodules/loader/source/patcher.c`
+**MENU functions used:**
+- Home Menu patches register through `PLUGIN_MENU_RegisterHomePatch`
+- NewsList applet patches register through `PLUGIN_MENU_RegisterTitlePatch`
 
 ---
 
 ## blur
 
-A helper Sysplugin used by multiple of my other plugins, including PlayCoinz. It provides a custom thread and callback support for shared Rosalina-side work.
+A helper Sysplugin used by multiple of my other plugins, including PlayCoinz. It provides the shared Rosalina-side worker, timed callbacks, menu draw callbacks, and sleep-aware I/O coordination used by other Sysplugins.
+
+It also uses MENU's APIs for menu registration, settings storage, Online Menu entries, and temporary host-page mapping.
 
 **Relevant files:**
 - `sysmodules/rosalina/source/blurro.c`
 - `sysmodules/rosalina/source/blurro_hooks.c`
 
 **Markers in:**
-- `sysmodules/rosalina/source/menu.c`
+- `sysmodules/rosalina/source/menu.c` - menu enter / leave and draw boundaries
 
 ---
 
@@ -112,7 +114,7 @@ This was made as a mini proof-of-concept that the requirement of forking Luma3DS
 - `sysmodules/rosalina/source/powerprevent_hooks.c`
 
 **Markers in:**
-- `sysmodules/rosalina/source/menu.c`
+- `sysmodules/rosalina/source/menu.c` - key scan point
 
 ---
 
