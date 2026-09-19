@@ -278,6 +278,8 @@ PLUGIN_RODATA(coin) static const char g_coinDisableProgressiveCostItem[] =
     "Disable Progressive Coin Cost";
 PLUGIN_RODATA(coin) static const char g_coinEnableProgressiveCostItem[] =
     "Enable Progressive Coin Cost";
+PLUGIN_RODATA(coin) static const char g_coinCleanStaleNotificationsItem[] =
+    "Clean Stale Notifications";
 PLUGIN_RODATA(coin) static const char g_coinTierEasy[] = "Easy";
 PLUGIN_RODATA(coin) static const char g_coinTierMedium[] = "Medium";
 PLUGIN_RODATA(coin) static const char g_coinTierHard[] = "Hard";
@@ -321,6 +323,14 @@ PLUGIN_RODATA(coin) static const char g_coinAchievementsDisableExplain[] =
     "\n"
     "You can delete notifications from the\n"
     "Achievements page beforehand.";
+PLUGIN_RODATA(coin) static const char g_coinCleanStaleNotificationsExplain[] =
+    "If you have earned notifications from an older\n"
+    "PlayCoinz save, this will delete any you have\n"
+    "NOT earned according to your current save file.\n"
+    "\n"
+    "Deleting notifications of Achievements you\n"
+    "currently own can be done from the View\n"
+    "Achievements page.";
 PLUGIN_RODATA(coin) static const char g_coinResultAlreadyExists[] =
     "This already exists in your notifications!";
 PLUGIN_RODATA(coin) static const char g_coinResultDone[] = "Done!";

@@ -864,22 +864,22 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawConfirmItem(
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_DrawAchievementConfirm(
     u32 selected,
-    bool disablingAchievements
+    const char *explain
 )
 {
-    u32 noY = disablingAchievements ? 173u : 55u;
-    u32 yesY = disablingAchievements ? 188u : 70u;
+    u32 noY = explain ? 173u : 55u;
+    u32 yesY = explain ? 188u : 70u;
 
     COIN_HOST__Draw_Lock();
     COIN_HOST__Draw_ClearFramebuffer();
     PLUGIN_coin_DrawFrame(g_coinConfirmTitle);
-    if (disablingAchievements)
+    if (explain)
     {
         COIN_HOST__Draw_DrawString(
             20,
             42,
             COLOR_WHITE,
-            g_coinAchievementsDisableExplain
+            explain
         );
     }
     PLUGIN_coin_DrawConfirmItem(noY, selected == 0u, g_coinConfirmNo);
@@ -891,11 +891,11 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawAchievementConfirm(
 PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawAchievementConfirmSelection(
     u32 oldSelected,
     u32 selected,
-    bool disablingAchievements
+    bool hasExplain
 )
 {
-    u32 noY = disablingAchievements ? 173u : 55u;
-    u32 yesY = disablingAchievements ? 188u : 70u;
+    u32 noY = hasExplain ? 173u : 55u;
+    u32 yesY = hasExplain ? 188u : 70u;
     u32 oldY = oldSelected == 0u ? noY : yesY;
     u32 newY = selected == 0u ? noY : yesY;
     const char *oldText = oldSelected == 0u ? g_coinConfirmNo : g_coinConfirmYes;
@@ -911,11 +911,11 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawAchievementConfirmSelection(
 }
 
 PLUGIN_CODE(coin) static bool PLUGIN_coin_ConfirmAchievementAction(
-    bool disablingAchievements
+    const char *explain
 )
 {
     u32 selected = 0;
-    PLUGIN_coin_DrawAchievementConfirm(selected, disablingAchievements);
+    PLUGIN_coin_DrawAchievementConfirm(selected, explain);
 
     do
     {
@@ -929,7 +929,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ConfirmAchievementAction(
             PLUGIN_coin_RedrawAchievementConfirmSelection(
                 oldSelected,
                 selected,
-                disablingAchievements
+                explain != NULL
             );
         }
         else if (pressed & KEY_A)
@@ -999,6 +999,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ConfirmProgressiveCostAction(void)
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_DrawAchievementActionResult(
+    const char *title,
     const char *message,
     bool error,
     Result rc
@@ -1006,7 +1007,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawAchievementActionResult(
 {
     COIN_HOST__Draw_Lock();
     COIN_HOST__Draw_ClearFramebuffer();
-    PLUGIN_coin_DrawFrame(g_coinAchievementsPageTitle);
+    PLUGIN_coin_DrawFrame(title);
     if (error)
         COIN_HOST__Draw_DrawFormattedString(20, 65, COLOR_RED, g_errorFormat, (u32)rc);
     else
@@ -1035,7 +1036,12 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RunAchievementAction(
 
     if (R_FAILED(rc))
     {
-        PLUGIN_coin_DrawAchievementActionResult(NULL, true, rc);
+        PLUGIN_coin_DrawAchievementActionResult(
+            g_coinAchievementsPageTitle,
+            NULL,
+            true,
+            rc
+        );
         return;
     }
 
@@ -1044,6 +1050,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RunAchievementAction(
         if (matches)
         {
             PLUGIN_coin_DrawAchievementActionResult(
+                g_coinAchievementsPageTitle,
                 g_coinResultAlreadyExists,
                 false,
                 0
@@ -1054,19 +1061,50 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RunAchievementAction(
         rc = PLUGIN_coin_TriggerAchievement(achievementIndex);
         if (R_FAILED(rc))
         {
-            PLUGIN_coin_DrawAchievementActionResult(NULL, true, rc);
+            PLUGIN_coin_DrawAchievementActionResult(
+                g_coinAchievementsPageTitle,
+                NULL,
+                true,
+                rc
+            );
             return;
         }
 
-        PLUGIN_coin_DrawAchievementActionResult(g_coinResultDone, false, 0);
+        PLUGIN_coin_DrawAchievementActionResult(
+            g_coinAchievementsPageTitle,
+            g_coinResultDone,
+            false,
+            0
+        );
         return;
     }
 
     PLUGIN_coin_DrawAchievementActionResult(
+        g_coinAchievementsPageTitle,
         matches ? g_coinResultDone : g_coinResultNotFound,
         false,
         0
     );
+}
+
+PLUGIN_CODE(coin) static Result PLUGIN_coin_CleanStaleNotifications(void)
+{
+    u32 earnedMask = 0;
+    Result rc = PLUGIN_coin_ReadAchievementEarnedMask(&earnedMask);
+    if (R_FAILED(rc))
+        return rc;
+
+    for (u32 i = 0; i < COIN_ACHIEVEMENT_COUNT; i++)
+    {
+        if (earnedMask & (1u << i))
+            continue;
+
+        rc = PLUGIN_coin_ScanAchievementNews(i, true, NULL);
+        if (R_FAILED(rc))
+            return rc;
+    }
+
+    return 0;
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_OpenAchievementOptions(u32 achievementIndex)
@@ -1096,7 +1134,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenAchievementOptions(u32 achievement
         else if (pressed & KEY_A)
         {
             bool resend = selected == 0u;
-            if (PLUGIN_coin_ConfirmAchievementAction(false))
+            if (PLUGIN_coin_ConfirmAchievementAction(NULL))
                 PLUGIN_coin_RunAchievementAction(achievementIndex, resend);
             PLUGIN_coin_DrawAchievementOptionMenu(selected);
         }
@@ -1208,16 +1246,21 @@ PLUGIN_CODE(coin) static const char *PLUGIN_coin_OptionTitle(u32 selected)
         return g_coinAchievementsEnabled ? g_coinDisableAchievementsItem :
             g_coinEnableAchievementsItem;
     }
-
-    return g_coinProgressiveCostEnabled ? g_coinDisableProgressiveCostItem :
-        g_coinEnableProgressiveCostItem;
+    if (selected == 1u)
+    {
+        return g_coinProgressiveCostEnabled ? g_coinDisableProgressiveCostItem :
+            g_coinEnableProgressiveCostItem;
+    }
+    return g_coinCleanStaleNotificationsItem;
 }
 
 PLUGIN_CODE(coin) static u32 PLUGIN_coin_OptionColor(u32 selected)
 {
     if (selected == 0u)
         return g_coinAchievementsEnabled ? COLOR_WHITE : COLOR_GREEN;
-    return g_coinProgressiveCostEnabled ? COLOR_WHITE : COLOR_GREEN;
+    if (selected == 1u)
+        return g_coinProgressiveCostEnabled ? COLOR_WHITE : COLOR_GREEN;
+    return COLOR_WHITE;
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_DrawOptions(u32 selected)
@@ -1225,7 +1268,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawOptions(u32 selected)
     COIN_HOST__Draw_Lock();
     COIN_HOST__Draw_ClearFramebuffer();
     PLUGIN_coin_DrawFrame(g_coinOptionsPageTitle);
-    for (u32 i = 0; i < 2u; i++)
+    for (u32 i = 0; i < 3u; i++)
     {
         PLUGIN_coin_DrawSimpleMenuItem(
             PLUGIN_coin_OptionsY(i),
@@ -1309,10 +1352,16 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
         u32 pressed = COIN_HOST__waitInputWithTimeout(50);
         if (pressed & KEY_B)
             break;
-        if (pressed & (KEY_DUP | KEY_DDOWN))
+        if (pressed & KEY_DDOWN)
         {
             u32 oldSelected = selected;
-            selected = selected ? 0u : 1u;
+            selected = selected < 2u ? selected + 1u : 0u;
+            PLUGIN_coin_RedrawOptionsSelection(oldSelected, selected);
+        }
+        else if (pressed & KEY_DUP)
+        {
+            u32 oldSelected = selected;
+            selected = selected ? selected - 1u : 2u;
             PLUGIN_coin_RedrawOptionsSelection(oldSelected, selected);
         }
         else if (pressed & KEY_A)
@@ -1321,7 +1370,9 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
             {
                 if (g_coinAchievementsEnabled)
                 {
-                    if (PLUGIN_coin_ConfirmAchievementAction(true))
+                    if (PLUGIN_coin_ConfirmAchievementAction(
+                            g_coinAchievementsDisableExplain
+                        ))
                         g_coinAchievementsEnabled = false;
                     PLUGIN_coin_DrawOptions(selected);
                 }
@@ -1339,7 +1390,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
                     }
                 }
             }
-            else
+            else if (selected == 1u)
             {
                 if (g_coinProgressiveCostEnabled)
                 {
@@ -1357,6 +1408,25 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
                     else
                         PLUGIN_coin_DrawOptions(selected);
                 }
+            }
+            else
+            {
+                if (PLUGIN_coin_ConfirmAchievementAction(
+                        g_coinCleanStaleNotificationsExplain
+                    ))
+                {
+                    Result rc = PLUGIN_coin_CleanStaleNotifications();
+                    if (R_FAILED(rc))
+                    {
+                        PLUGIN_coin_DrawAchievementActionResult(
+                            g_coinOptionsPageTitle,
+                            NULL,
+                            true,
+                            rc
+                        );
+                    }
+                }
+                PLUGIN_coin_DrawOptions(selected);
             }
         }
     } while (!COIN_HOST__menuShouldExit);
