@@ -22,6 +22,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawEditor(
     u16 playCoins,
     u32 trueCoinDisplay,
     u32 recommendedDisplay,
+    bool pendingSpendBlocked,
     bool showResult,
     Result res
 )
@@ -32,10 +33,16 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawEditor(
     COIN_HOST__Draw_DrawFormattedString(20, 40, COLOR_WHITE, g_setCoinsFormat, playCoins);
     COIN_HOST__Draw_DrawString(20, 60, COLOR_WHITE, g_controlsText);
 
-    if (showResult)
+    if (pendingSpendBlocked)
+    {
+        COIN_HOST__Draw_DrawString(20, 100, COLOR_TITLE, g_pendingSpendText);
+    }
+    else if (showResult)
     {
         if (R_SUCCEEDED(res))
             COIN_HOST__Draw_DrawString(20, 100, COLOR_GREEN, g_successText);
+        else if (res == (Result)-1)
+            COIN_HOST__Draw_DrawString(20, 100, COLOR_TITLE, g_pendingSpendText);
         else
             COIN_HOST__Draw_DrawFormattedString(20, 100, COLOR_RED, g_errorFormat, res);
     }
@@ -100,10 +107,11 @@ PLUGIN_CODE(coin) void PLUGIN_coin_EditPlayCoins(void)
     COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
 
     // apply the edited balance
-    PLUGIN_coin_UpdatePlayCoins();
+    Result res = PLUGIN_coin_UpdatePlayCoins();
 
     u16 playCoins = coinsBin > coinsSpent ? (u16)(coinsBin - coinsSpent) : 0;
-    Result res = 0;
+    bool pendingSpendBlocked = coinsSpent > 0;
+    bool refreshFailed = R_FAILED(res);
     u32 pendingEarned = PLUGIN_coin_PendingEarned();
     u32 trueCoinDisplay = coinsTrue + pendingEarned; // coinstrue (aka coins ever earned) doesnt decrease
     u32 recommendedDisplay = coinsRec + pendingEarned > coinsSpent ?
@@ -114,7 +122,14 @@ PLUGIN_CODE(coin) void PLUGIN_coin_EditPlayCoins(void)
         playCoins != recommendedDisplay;
     u32 observedDiagSerial = g_coinHardDiagCompletedSerial;
 
-    PLUGIN_coin_DrawEditor(playCoins, trueCoinDisplay, recommendedDisplay, false, res);
+    PLUGIN_coin_DrawEditor(
+        playCoins,
+        trueCoinDisplay,
+        recommendedDisplay,
+        pendingSpendBlocked,
+        refreshFailed,
+        res
+    );
 
     do
     {
@@ -122,8 +137,18 @@ PLUGIN_CODE(coin) void PLUGIN_coin_EditPlayCoins(void)
 
         if (pressed & KEY_A)
         {
-            res = PLUGIN_coin_SetPlayCoins(playCoins);
-            PLUGIN_coin_DrawEditor(playCoins, trueCoinDisplay, recommendedDisplay, true, res);
+            if (!pendingSpendBlocked && !refreshFailed)
+            {
+                res = PLUGIN_coin_SetPlayCoins(playCoins);
+                PLUGIN_coin_DrawEditor(
+                    playCoins,
+                    trueCoinDisplay,
+                    recommendedDisplay,
+                    false,
+                    true,
+                    res
+                );
+            }
         }
         else if (pressed & KEY_B)
         {
@@ -175,7 +200,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_EditPlayCoins(void)
                         playCoins,
                         trueCoinDisplay,
                         recommendedDisplay,
-                        false,
+                        pendingSpendBlocked,
+                        refreshFailed,
                         res
                     );
                     previousWarning = currentWarning;
@@ -185,7 +211,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_EditPlayCoins(void)
                 COIN_HOST__Draw_Lock();
                 COIN_HOST__Draw_DrawString(20, 40, COLOR_WHITE, g_clearSetLine);
                 COIN_HOST__Draw_DrawFormattedString(20, 40, COLOR_WHITE, g_setCoinsFormat, playCoins);
-                COIN_HOST__Draw_DrawString(20, 100, COLOR_WHITE, g_clearResultLine);
+                if (!pendingSpendBlocked && !refreshFailed)
+                    COIN_HOST__Draw_DrawString(20, 100, COLOR_WHITE, g_clearResultLine);
                 COIN_HOST__Draw_FlushFramebuffer();
                 COIN_HOST__Draw_Unlock();
             }
@@ -200,7 +227,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_EditPlayCoins(void)
                 playCoins,
                 trueCoinDisplay,
                 recommendedDisplay,
-                R_FAILED(res),
+                pendingSpendBlocked,
+                refreshFailed || R_FAILED(res),
                 res
             );
         }

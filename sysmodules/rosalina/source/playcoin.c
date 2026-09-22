@@ -374,6 +374,8 @@ PLUGIN_RODATA(coin) static const char g_psServiceName[] = "ps:ps";
 PLUGIN_RODATA(coin) static const char g_setCoinsFormat[] = "Set Play Coins: %d";
 PLUGIN_RODATA(coin) static const char g_controlsText[] = "DPAD Up/Down: +-1\nDPAD Right/Left: +-10\nA: Apply";
 PLUGIN_RODATA(coin) static const char g_successText[] = "Play Coins successfully set.";
+PLUGIN_RODATA(coin) static const char g_pendingSpendText[] =
+    "Please return to HOME to set coins.";
 PLUGIN_RODATA(coin) static const char g_errorFormat[] = "Error: 0x%08lx";
 PLUGIN_RODATA(coin) static const char g_recommendedText[] = "Recommended:";
 PLUGIN_RODATA(coin) static const char g_recommendedFormat[] = "Press Y to return to tracked coins: %lu";
@@ -553,8 +555,7 @@ PLUGIN_BSS(coin) static u32 g_coinCompletedDay;
 PLUGIN_BSS(coin) static u32 g_coinCompletedWeek;
 PLUGIN_BSS(coin) static u32 g_coinExtendedData[COIN_FILE_EXTENSION_WORDS];
 PLUGIN_BSS(coin) static bool g_coinExtendedDirty;
-PLUGIN_BSS(coin) static bool g_coinBalanceEvent;
-PLUGIN_BSS(coin) static bool g_coinGambleEvent;
+PLUGIN_BSS(coin) static bool g_coinMilestoneEvent;
 PLUGIN_BSS(coin) static u32 g_coinCalendarMaintenanceTicks;
 PLUGIN_BSS(coin) static char (*g_coinAchievementTitles)[40];
 PLUGIN_BSS(coin) static char *g_coinAchievementDetailTitle;
@@ -810,8 +811,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
         g_coinEarnedEventPending = true;
 
     bool spentEvent = coinsEverSpent != g_lastEverSpent;
-    bool balanceEvent = g_coinBalanceEvent;
-    bool gambleEvent = g_coinGambleEvent;
+    bool milestoneEvent = g_coinMilestoneEvent;
 
     PLUGIN_coin_AddTodayWalked(earnedBatch, currentDay);
     PLUGIN_coin_ClampTodayToHomeCounter(currentDay, currentStamp);
@@ -900,20 +900,19 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     g_lastRecommended = savedRecommended;
     g_lastEverSpent = savedLifetimeSpent;
     g_coinExtendedDirty = false;
-    g_coinBalanceEvent = false;
-    g_coinGambleEvent = false;
+    g_coinMilestoneEvent = false;
 
     // run achievement checks after the new coin state is saved
     if (earnedEvent)
         PLUGIN_coin_CheckWalkAchievements();
     if (completedWalkEvent)
         PLUGIN_coin_CheckWalkPeriodAchievements(completedDay, completedWeek);
+    // Shared balance requirements are evaluated once after whichever event
+    // could have completed them. Walking already performs this check above.
+    if (!earnedEvent && (spentEvent || milestoneEvent))
+        PLUGIN_coin_CheckBalanceAchievements();
     if (spentEvent)
         PLUGIN_coin_CheckSpendAchievements();
-    if (balanceEvent)
-        PLUGIN_coin_CheckBalanceAchievements();
-    if (gambleEvent)
-        PLUGIN_coin_CheckGambleAchievements();
 
     // coins.bin: old 0x20 base, 0x20 extension, optional 8-byte secret mask
 }
@@ -959,8 +958,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SetupCoins(void)
         g_coinAchievementSaveValid = false;
         g_coinAchievementSavedMask = 0;
         g_coinExtendedDirty = false;
-        g_coinBalanceEvent = false;
-        g_coinGambleEvent = false;
+        g_coinMilestoneEvent = false;
         PLUGIN_coin_ResetExtendedData();
 
         u64 fileSize = 0;
@@ -1115,22 +1113,24 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UpdatePlayCoins(void)
         return (Result)-1;
     }
 
-    u32 read;
+    u32 read = 0;
     u16 systemCoins = 0;
     res = COIN_HOST__FSFILE_Read(file, &read, 4, &systemCoins, sizeof(systemCoins));
-    bool useFallback = R_FAILED(res) || read != sizeof(systemCoins);
-
-    if (useFallback)
-        systemCoins = g_coinDat;
-
-    // normal coinsSpent tops at 300, still clamp cheated weirdness
-    coinsSpent = 0;
-    if (g_coinDat > systemCoins)
+    if (R_SUCCEEDED(res) && read == sizeof(systemCoins))
     {
-        u32 spent = g_coinDat - systemCoins;
-        coinsSpent = spent > 300 ? 300 : (u16)spent;
+        // normal coinsSpent tops at 300, still clamp cheated weirdness
+        coinsSpent = 0;
+        if (g_coinDat > systemCoins)
+        {
+            u32 spent = g_coinDat - systemCoins;
+            coinsSpent = spent > 300 ? 300 : (u16)spent;
+        }
+        COIN_HOST__svcFlushEntireDataCache();
     }
-    COIN_HOST__svcFlushEntireDataCache();
+    else if (R_SUCCEEDED(res))
+    {
+        res = (Result)-1;
+    }
 
     bool unlocked = PLUGIN_coin_UnlockHomeState(homeProcess);
     COIN_HOST__FSFILE_Close(file);
@@ -1181,14 +1181,17 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_SetPlayCoins(u16 amount)
     u16 newAmount = amount > 300 ? 300 : amount;
     u16 savedAmount = newAmount > coinsSpent ? newAmount - coinsSpent : 0;
     // Home Menu consumes this vanilla-side balance
+    u32 written = 0;
     res = COIN_HOST__FSFILE_Write(
         file,
-        NULL,
+        &written,
         4,
         &savedAmount,
         sizeof(savedAmount),
         FS_WRITE_FLUSH
     );
+    if (R_SUCCEEDED(res) && written != sizeof(savedAmount))
+        res = (Result)-1;
     if (R_FAILED(res))
     {
         (void)PLUGIN_coin_UnlockHomeState(homeProcess);

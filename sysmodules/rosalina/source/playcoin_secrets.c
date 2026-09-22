@@ -36,13 +36,13 @@ PLUGIN_CODE(coin) void PLUGIN_coin_CheckBalanceAchievements(void)
     PLUGIN_coin_TryAchievement(2u, PLUGIN_coin_MeetsBalanceMilestone(777u));
     PLUGIN_coin_TryAchievement(4u, PLUGIN_coin_MeetsBalanceMilestone(999u));
     PLUGIN_coin_TryAchievement(6u,
-        PLUGIN_coin_MeetsBalanceMilestone(1000u) &&
-        coinsTrue >= 1000u && coinsEverSpent >= 300u);
+        PLUGIN_coin_MeetsBalanceMilestone(1984u) &&
+        coinsTrue >= 1984u && coinsEverSpent >= 300u);
     PLUGIN_coin_TryAchievement(7u,
-        PLUGIN_coin_MeetsBalanceMilestone(2000u) && coinsTrue >= 2000u);
+        PLUGIN_coin_MeetsBalanceMilestone(3000u) && coinsTrue >= 3000u);
     PLUGIN_coin_TryAchievement(8u,
-        PLUGIN_coin_MeetsBalanceMilestone(5000u) &&
-        coinsTrue >= 5000u && qualified >= 1000u);
+        PLUGIN_coin_MeetsBalanceMilestone(7777u) &&
+        qualified >= 1000u);
     PLUGIN_coin_TryAchievement(9u, PLUGIN_coin_MeetsBalanceMilestone(9999u));
     PLUGIN_coin_TryAchievement(11u,
         PLUGIN_coin_MeetsBalanceMilestone(15000u) && coinsTrue >= 15000u);
@@ -65,7 +65,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_CheckWalkPeriodAchievements(
     PLUGIN_coin_TryAchievement(5u, day >= 75u);
     PLUGIN_coin_TryAchievement(10u, day >= 100u);
     PLUGIN_coin_TryAchievement(14u, week >= 500u);
-    PLUGIN_coin_TryAchievement(16u, week >= 777u);
+    PLUGIN_coin_TryAchievement(16u, week >= 700u);
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_CheckWalkAchievements(void)
@@ -85,24 +85,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_CheckSpendAchievements(void)
     if (!g_coinAchievementsEnabled)
         return;
 
-    PLUGIN_coin_TryAchievement(6u,
-        PLUGIN_coin_MeetsBalanceMilestone(1000u) &&
-        coinsTrue >= 1000u && coinsEverSpent >= 300u);
     PLUGIN_coin_TryAchievement(13u, coinsEverSpent >= 10000u);
-}
-
-PLUGIN_CODE(coin) void PLUGIN_coin_CheckGambleAchievements(void)
-{
-    if (!g_coinAchievementsEnabled)
-        return;
-
-    u32 qualified = PLUGIN_coin_GetBlackjackQualifiedCounter();
-    PLUGIN_coin_TryAchievement(8u,
-        PLUGIN_coin_MeetsBalanceMilestone(5000u) &&
-        coinsTrue >= 5000u && qualified >= 1000u);
-    PLUGIN_coin_TryAchievement(17u,
-        PLUGIN_coin_MeetsBalanceMilestone(30000u) &&
-        coinsTrue >= 30000u && qualified >= 30000u);
 }
 #elif defined(PLAYCOIN_SECRETS_DATA)
 PLUGIN_CODE(coin) static void PLUGIN_coin_DecodeAchievementString(u16 *text, u32 capacity)

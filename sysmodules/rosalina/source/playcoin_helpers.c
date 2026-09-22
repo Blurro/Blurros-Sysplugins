@@ -317,14 +317,17 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_WriteVanillaCoinBalance(u16 amount)
     );
     if (R_SUCCEEDED(rc))
     {
+        u32 written = 0;
         rc = COIN_HOST__FSFILE_Write(
             file,
-            NULL,
+            &written,
             4,
             &amount,
             sizeof(amount),
             FS_WRITE_FLUSH
         );
+        if (R_SUCCEEDED(rc) && written != sizeof(amount))
+            rc = (Result)-1;
         Result closeRc = COIN_HOST__FSFILE_Close(file);
         if (R_SUCCEEDED(rc) && R_FAILED(closeRc))
             rc = closeRc;
@@ -439,7 +442,7 @@ PLUGIN_CODE(coin) u32 PLUGIN_coin_RecordBlackjackQualified(u32 qualifiedCoins)
 
     PLUGIN_coin_SetBlackjackCounters(deposited, qualified + credited);
     g_coinExtendedDirty = true;
-    g_coinGambleEvent = true;
+    g_coinMilestoneEvent = true;
     COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
     return credited;
 
@@ -481,7 +484,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_RecordBlackjackWithdrawal(
     g_coinExtendedData[COIN_EXT_BLACKJACK_SURPLUS_WORD] = newSurplus;
     coinsRec += receivedCoins;
     g_coinExtendedDirty = true;
-    g_coinBalanceEvent = true;
+    g_coinMilestoneEvent = true;
     COIN_HOST__svcFlushEntireDataCache();
     accepted = true;
 

@@ -6,7 +6,7 @@ cd "$SCRIPT_DIR"
 
 # Independent installed-asset versions. Bump only the asset that changed.
 ICN_VERSION=1
-ACHV_VERSION=3
+ACHV_VERSION=4
 EASYTOP_VERSION=2
 MEDIUMTOP_VERSION=2
 HARDTOP_VERSION=2
@@ -228,7 +228,7 @@ def decompress_lz10(blob):
 
 
 # Normal plugin metadata versions consumed directly by makeplugin.sh.
-for version in (100, 101, 102, 103, 104, 105, 106, 107):
+for version in (100, 101, 102, 103, 104, 105, 106, 107, 108):
     Path(f"version{version}.bin").write_bytes(MAGIC + struct.pack("<I", version))
 
 compressed_items = [
