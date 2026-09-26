@@ -162,6 +162,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)PLUGIN_blur_SleepLeaveIo,
     (void*)PLUGIN_MENU_RemoveItem,
     (void*)PLUGIN_MENU_ExtractRawFile,
+    (void*)PLUGIN_MENU_GetApiVersion,
 };
 
 #define COIN_BLUR__AddTickFunc            ((bool(*)(BlurTickFunc,s64))pluginTable_coin[0])
@@ -211,6 +212,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_HOST__Sleep_LeaveIo           ((void(*)(void))pluginTable_coin[48])
 #define COIN_MENU__RemoveItem             ((bool(*)(PluginMenuRegistration*))pluginTable_coin[49])
 #define COIN_MENU__ExtractRawFile          ((Result(*)(const PluginMenuFileContext*,u32,u32,const char*))pluginTable_coin[50])
+#define COIN_MENU__GetApiVersion           ((u32(*)(void))pluginTable_coin[51])
 #define COIN_HOST__OperateOnProcessByName  ((Result(*)(const char*,OperateOnProcessCb))pluginTable_coin[1])
 #define COIN_HOST__svcFlushEntireDataCache ((void(*)(void))pluginTable_coin[11])
 #define COIN_HOST__svcInvalidateEntireInstructionCache ((void(*)(void))pluginTable_coin[12])
@@ -1314,7 +1316,13 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RemoveBuiltInMenuItem(void)
 
 PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
 {
-    if (!COIN_BLUR__AddTickFunc || !COIN_BLUR__RemoveTickFunc ||
+    if (!COIN_MENU__GetApiVersion)
+        return false;
+
+    u32 menuApiVersion = COIN_MENU__GetApiVersion();
+    if (SYSPLUGIN_MENU_API_LOADER_REVISION(menuApiVersion) < SYSPLUGIN_MENU_LOADER_API_REVISION ||
+        SYSPLUGIN_MENU_API_PUBLIC_REVISION(menuApiVersion) < SYSPLUGIN_MENU_PUBLIC_API_REVISION ||
+        !COIN_BLUR__AddTickFunc || !COIN_BLUR__RemoveTickFunc ||
         !COIN_BLUR__AddFeatureItem ||
         !COIN_BLUR__DrawFeatureFrame || !COIN_MENU__AddItem ||
         !COIN_MENU__RemoveItem || !COIN_MENU__OpenPluginFile || !COIN_MENU__UnpackLz10File ||

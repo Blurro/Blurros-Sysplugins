@@ -43,6 +43,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)PLUGIN_MENU_UnregisterTitlePatch,
     (void*)PLUGIN_MENU_RegisterHomePatch,
     (void*)PLUGIN_MENU_UnregisterHomePatch,
+    (void*)PLUGIN_MENU_GetApiVersion,
 };
 
 #define COIN_HOST__FSUSER_OpenArchive  ((Result(*)(FS_Archive*,FS_ArchiveID,FS_Path))pluginTable_coin[0])
@@ -56,6 +57,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_MENU__UnregisterTitlePatch ((bool(*)(PluginMenuLoaderTitlePatch*))pluginTable_coin[8])
 #define COIN_MENU__RegisterHomePatch   ((bool(*)(PluginMenuLoaderHomePatch*))pluginTable_coin[9])
 #define COIN_MENU__UnregisterHomePatch ((bool(*)(PluginMenuLoaderHomePatch*))pluginTable_coin[10])
+#define COIN_MENU__GetApiVersion       ((u32(*)(void))pluginTable_coin[11])
 
 PLUGIN_RODATA(coin) static const char g_coinFilePath[] = "/luma/coins.bin";
 PLUGIN_RODATA(coin) static const char g_gameCoinPath[] = "/gamecoin.dat";
@@ -541,7 +543,13 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
 
 PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
 {
-    if (!COIN_MENU__RegisterTitlePatch || !COIN_MENU__UnregisterTitlePatch ||
+    if (!COIN_MENU__GetApiVersion)
+        return false;
+
+    u32 menuApiVersion = COIN_MENU__GetApiVersion();
+    if (SYSPLUGIN_MENU_API_LOADER_REVISION(menuApiVersion) < SYSPLUGIN_MENU_LOADER_API_REVISION ||
+        SYSPLUGIN_MENU_API_PUBLIC_REVISION(menuApiVersion) < SYSPLUGIN_MENU_PUBLIC_API_REVISION ||
+        !COIN_MENU__RegisterTitlePatch || !COIN_MENU__UnregisterTitlePatch ||
         !COIN_MENU__RegisterHomePatch || !COIN_MENU__UnregisterHomePatch)
     {
         return false;
