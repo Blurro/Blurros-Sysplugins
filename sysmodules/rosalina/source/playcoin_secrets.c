@@ -273,83 +273,12 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_EnsureAchievementAssetDirectory(FS_Arc
     );
 }
 
-PLUGIN_CODE(coin) static Result PLUGIN_coin_CopyPackedAssetRange(
-    const PluginMenuFileContext *source,
-    u32 sourceOffset,
-    u32 sourceSize,
-    const char *outputPath,
-    u8 *scratch
-)
-{
-    if (!source || !source->archive || !source->file || !sourceSize || !outputPath)
-        return (Result)0xD8A0B004u;
-
-    FS_Path path = COIN_HOST__fsMakePath(PATH_ASCII, outputPath);
-    (void)COIN_HOST__FSUSER_CreateFile(source->archive, path, 0, sourceSize);
-
-    Handle output = 0;
-    Result rc = COIN_HOST__FSUSER_OpenFile(
-        &output,
-        source->archive,
-        path,
-        FS_OPEN_WRITE,
-        0
-    );
-    if (R_FAILED(rc))
-        return rc;
-
-    rc = COIN_HOST__FSFILE_SetSize(output, sourceSize);
-    if (R_FAILED(rc))
-        goto cleanup;
-
-    u32 copied = 0;
-    while (copied < sourceSize)
-    {
-        u32 chunk = sourceSize - copied;
-        if (chunk > 0x1000u)
-            chunk = 0x1000u;
-
-        if (!PLUGIN_coin_ReadExactFile(
-                source->file,
-                (u64)sourceOffset + copied,
-                scratch,
-                chunk))
-        {
-            rc = (Result)0xD8A0B007u;
-            goto cleanup;
-        }
-
-        u32 written = 0;
-        rc = COIN_HOST__FSFILE_Write(
-            output,
-            &written,
-            copied,
-            scratch,
-            chunk,
-            FS_WRITE_FLUSH
-        );
-        if (R_FAILED(rc) || written != chunk)
-        {
-            rc = R_FAILED(rc) ? rc : (Result)0xD8A0B008u;
-            goto cleanup;
-        }
-
-        copied += chunk;
-    }
-
-cleanup:
-    COIN_HOST__FSFILE_Close(output);
-    return rc;
-}
-
 PLUGIN_CODE(coin) static Result PLUGIN_coin_UnpackAssetMaskWithContext(
     const PluginMenuFileContext *source,
     const CoinPackedAssetLocation locations[COIN_PACKED_ASSET_COUNT],
     u32 assetMask
 )
 {
-    u32 scratchBase = 0;
-    u8 *scratch = NULL;
     assetMask &= COIN_ASSET_ALL_MASK;
     if (!assetMask)
         return 0;
@@ -357,12 +286,6 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UnpackAssetMaskWithContext(
         return (Result)0xD8A0B004u;
 
     PLUGIN_coin_EnsureAchievementAssetDirectory(source->archive);
-    if (assetMask & ~((1u << COIN_ASSET_EASYTOP) - 1u))
-    {
-        if (!COIN_MENU__TempAlloc(0x1000u, &scratchBase))
-            return (Result)-8;
-        scratch = (u8 *)scratchBase;
-    }
 
     Result result = 0;
     for (u32 i = 0; i < COIN_PACKED_ASSET_COUNT; i++)
@@ -382,12 +305,11 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UnpackAssetMaskWithContext(
         }
         else
         {
-            rc = PLUGIN_coin_CopyPackedAssetRange(
+            rc = COIN_MENU__ExtractRawFile(
                 source,
                 locations[i].dataOffset,
                 locations[i].dataSize,
-                g_coinPackedAssetPaths[i],
-                scratch
+                g_coinPackedAssetPaths[i]
             );
         }
         if (R_FAILED(rc))
@@ -408,8 +330,6 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UnpackAssetMaskWithContext(
         }
     }
 
-    if (scratchBase)
-        COIN_MENU__TempFree(scratchBase, 0x1000u);
     return result;
 }
 

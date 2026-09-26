@@ -161,6 +161,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)PLUGIN_blur_SleepTryEnterIo,
     (void*)PLUGIN_blur_SleepLeaveIo,
     (void*)PLUGIN_MENU_RemoveItem,
+    (void*)PLUGIN_MENU_ExtractRawFile,
 };
 
 #define COIN_BLUR__AddTickFunc            ((bool(*)(BlurTickFunc,s64))pluginTable_coin[0])
@@ -209,6 +210,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_HOST__Sleep_TryEnterIo        ((bool(*)(void))pluginTable_coin[47])
 #define COIN_HOST__Sleep_LeaveIo           ((void(*)(void))pluginTable_coin[48])
 #define COIN_MENU__RemoveItem             ((bool(*)(PluginMenuRegistration*))pluginTable_coin[49])
+#define COIN_MENU__ExtractRawFile          ((Result(*)(const PluginMenuFileContext*,u32,u32,const char*))pluginTable_coin[50])
 #define COIN_HOST__OperateOnProcessByName  ((Result(*)(const char*,OperateOnProcessCb))pluginTable_coin[1])
 #define COIN_HOST__svcFlushEntireDataCache ((void(*)(void))pluginTable_coin[11])
 #define COIN_HOST__svcInvalidateEntireInstructionCache ((void(*)(void))pluginTable_coin[12])
@@ -1316,7 +1318,7 @@ PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
         !COIN_BLUR__AddFeatureItem ||
         !COIN_BLUR__DrawFeatureFrame || !COIN_MENU__AddItem ||
         !COIN_MENU__RemoveItem || !COIN_MENU__OpenPluginFile || !COIN_MENU__UnpackLz10File ||
-        !COIN_MENU__ClosePluginFile || !COIN_MENU__LoadData ||
+        !COIN_MENU__ExtractRawFile || !COIN_MENU__ClosePluginFile || !COIN_MENU__LoadData ||
         !COIN_MENU__SaveData || !COIN_HOST__dateTimeToString)
     {
         return false;

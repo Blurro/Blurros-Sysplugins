@@ -86,6 +86,8 @@ Features art by [@AnasAbdin](https://x.com/AnasAbdin) for *\*secret\** top-scree
 **MENU functions used:**
 - Home Menu patches register through `PLUGIN_MENU_RegisterHomePatch`
 - NewsList applet patches register through `PLUGIN_MENU_RegisterTitlePatch`
+- Packed icon and achievement data use `PLUGIN_MENU_UnpackLz10File`
+- Uncompressed achievement image packs use `PLUGIN_MENU_ExtractRawFile`
 
 ---
 
