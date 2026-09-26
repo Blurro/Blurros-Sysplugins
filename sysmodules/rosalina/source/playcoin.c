@@ -84,43 +84,13 @@ typedef char CoinAchievementSizeCheck[(sizeof(CoinAchievement) == 1092u) ? 1 : -
 typedef char CoinAssetFileHeaderSizeCheck[(sizeof(CoinAssetFileHeader) == 8u) ? 1 : -1];
 typedef char CoinPackedAssetHeaderSizeCheck[(sizeof(CoinPackedAssetHeader) == 12u) ? 1 : -1];
 
-typedef struct
-{
-    char magic[8];
-    u32 formatVersion;
-    s32 serviceResult;
-    s32 totalResult;
-    u32 totalNotifications;
-    s32 arrivedResult;
-    u32 totalArrived;
-    s32 dbHeaderResult;
-    u32 slotsScanned;
-    u32 recordSize;
-    u32 maxMessageSize;
-    u8 dbHeader[0x10];
-} CoinNewsDumpHeader;
-
-typedef struct
-{
-    u32 slot;
-    s32 headerResult;
-    s32 messageResult;
-    u32 messageSize;
-    NotificationHeader header;
-} CoinNewsDumpRecord;
-
 typedef char CoinNewsHeaderSizeMustBe70[(sizeof(NotificationHeader) == 0x70) ? 1 : -1];
-typedef char CoinNewsDumpHeaderSizeMustBe40[(sizeof(CoinNewsDumpHeader) == 0x40) ? 1 : -1];
-typedef char CoinNewsDumpRecordSizeMustBe80[(sizeof(CoinNewsDumpRecord) == 0x80) ? 1 : -1];
 
 typedef struct
 {
     u32 logicalIndex;
     NotificationHeader header;
 } CoinNewsAnchor;
-
-PLUGIN_BSS(coin) static u8 g_coinNewsMessageBuffer[0x1780];
-
 
 extern bool PLUGIN_blur_AddTickFunc(BlurTickFunc func, s64 intervalNs);
 extern bool PLUGIN_blur_RemoveTickFunc(BlurTickFunc func);
@@ -265,7 +235,6 @@ PLUGIN_RODATA(coin) static const char g_gameCoinPath[] = "/gamecoin.dat";
 PLUGIN_RODATA(coin) static const char g_coinPtmU[] = "ptm:u";
 PLUGIN_RODATA(coin) const char g_coinMenuProcessName[] = "menu";
 PLUGIN_RODATA(coin) const char g_coinMenuTitle[] = "PlayCoinz Menu";
-PLUGIN_RODATA(coin) static const char g_coinBuiltInMenuTitle[] = "Set the number of Play Coins";
 PLUGIN_RODATA(coin) static const char g_coinPageTitle[] = "Coin Setter Menu";
 PLUGIN_RODATA(coin) static const char g_coinAchievementsPageTitle[] = "View Achievements";
 PLUGIN_RODATA(coin) static const char g_coinOptionsPageTitle[] = "PlayCoinz Options";
@@ -450,18 +419,47 @@ PLUGIN_RODATA(coin) static const char g_clearResultLine[] = "                   
 #define COIN_NEWS_DB_HEADER_SIZE        0x10u
 #define COIN_NEWS_DB_RECORD_SIZE        0x70u
 #define COIN_NEWS_DB_SIZE               0x2BD0u
-#define COIN_NEWS_RAW_DELETE_SPECIFIC   1u
-#define COIN_NEWS_RAW_DELETE_ALL        2u
 PLUGIN_RODATA(coin) static const char g_coinNewsName[] = "news";
 PLUGIN_RODATA(coin) static const char g_coinNewsServiceName[] = "news:s";
 PLUGIN_RODATA(coin) static const char g_coinAchievementPath[] = "/luma/coinachv/achv.bin";
 PLUGIN_RODATA(coin) static const char g_coinAchievementDirPath[] = "/luma/coinachv";
 PLUGIN_RODATA(coin) static const char g_coinIcnPath[] = "/luma/coinachv/icn.bin";
-PLUGIN_DATA(coin) static char g_coinNewsDumpPath[] = "/luma/newsdump00.bin";
 PLUGIN_RODATA(coin) static const char g_coinEasyTopImagePath[] = "/luma/coinachv/easytop.bin";
 PLUGIN_RODATA(coin) static const char g_coinMediumTopImagePath[] = "/luma/coinachv/mediumtop.bin";
 PLUGIN_RODATA(coin) static const char g_coinHardTopImagePath[] = "/luma/coinachv/hardtop.bin";
 PLUGIN_RODATA(coin) static const char g_coinExtremeTopImagePath[] = "/luma/coinachv/extremtop.bin";
+PLUGIN_DATA(coin) static const char *g_coinPackedAssetPaths[COIN_PACKED_ASSET_COUNT] = {
+    g_coinIcnPath,
+    g_coinAchievementPath,
+    g_coinEasyTopImagePath,
+    g_coinMediumTopImagePath,
+    g_coinHardTopImagePath,
+    g_coinExtremeTopImagePath,
+};
+PLUGIN_DATA(coin) static const char *g_coinAchievementImagePackPaths[4] = {
+    g_coinEasyTopImagePath,
+    g_coinMediumTopImagePath,
+    g_coinHardTopImagePath,
+    g_coinExtremeTopImagePath,
+};
+PLUGIN_DATA(coin) static const char *g_coinAchievementTierNames[4] = {
+    g_coinTierEasy,
+    g_coinTierMedium,
+    g_coinTierHard,
+    g_coinTierExtreme,
+};
+PLUGIN_RODATA(coin) static const u32 g_coinAchievementTierMasks[4] = {
+    0x0000001Fu,
+    0x000003E0u,
+    0x00007C00u,
+    0x00038000u,
+};
+PLUGIN_RODATA(coin) static const u32 g_coinAchievementTierColors[4] = {
+    COIN_ACHV_EASY_COLOR,
+    COLOR_YELLOW,
+    COIN_ACHV_HARD_COLOR,
+    COLOR_RED,
+};
 PLUGIN_RODATA(coin) static const u64 g_coinAchievementProcessIds[4] = {
     0x000400306E696F63ULL,
     0x000400316E696F63ULL,
@@ -561,11 +559,9 @@ PLUGIN_BSS(coin) static char (*g_coinAchievementTitles)[40];
 PLUGIN_BSS(coin) static char *g_coinAchievementDetailTitle;
 PLUGIN_BSS(coin) static char *g_coinAchievementDetailMessage;
 PLUGIN_BSS(coin) static CoinNewsAnchor *g_coinNewsAnchors;
-PLUGIN_BSS(coin) static Result *g_coinNewsLogicalResults;
 PLUGIN_BSS(coin) static u32 g_coinNewsAnchorCount;
 PLUGIN_BSS(coin) static u32 g_coinNewsExpectedTotal;
-PLUGIN_BSS(coin) static u32 g_coinNewsRawDeleteMode;
-PLUGIN_BSS(coin) static u16 *g_coinNewsRawDeleteTitle;
+PLUGIN_BSS(coin) static const u16 *g_coinNewsRawDeleteTitle;
 PLUGIN_BSS(coin) static u32 g_coinNewsRawRemoved;
 
 #define coinsBin       g_coinData[0]
@@ -590,6 +586,7 @@ extern void PLUGIN_coin_ConsumeRtcDayDecision(void);
 extern Result PLUGIN_coin_TriggerAchievement(u32 achievementIndex);
 static void PLUGIN_coin_SyncAchievementSettingToExtendedData(void);
 static void PLUGIN_coin_HandleCoins(void);
+static u32 *PLUGIN_coin_CommandBuffer(void);
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_SaveMenuSettings(void)
 {
@@ -708,6 +705,15 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTodayToHomeCounter(u32 currentDay
 #define PLAYCOIN_HELPERS_STATE
 #include "playcoin_helpers.c"
 #undef PLAYCOIN_HELPERS_STATE
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_CloseFileArchive(
+    Handle file,
+    FS_Archive archive
+)
+{
+    COIN_HOST__FSFILE_Close(file);
+    COIN_HOST__FSUSER_CloseArchive(archive);
+}
 
 PLUGIN_CODE(coin) static u32 PLUGIN_coin_TakeEarnedBatch(void)
 {
@@ -1082,34 +1088,14 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UpdatePlayCoins(void)
 {
     FS_Archive archive;
     Handle file;
-    FS_Path pathData;
-
-    pathData.type = PATH_BINARY;
-    pathData.size = sizeof(g_gameCoinArchivePath);
-    pathData.data = g_gameCoinArchivePath;
-
-    Result res = COIN_HOST__FSUSER_OpenArchive(&archive, ARCHIVE_SHARED_EXTDATA, pathData);
+    Result res = PLUGIN_coin_OpenGameCoinFile(&archive, &file, FS_OPEN_READ);
     if (R_FAILED(res))
         return res;
-
-    res = COIN_HOST__FSUSER_OpenFile(
-        &file,
-        archive,
-        COIN_HOST__fsMakePath(PATH_ASCII, g_gameCoinPath),
-        FS_OPEN_READ,
-        0
-    );
-    if (R_FAILED(res))
-    {
-        COIN_HOST__FSUSER_CloseArchive(archive);
-        return res;
-    }
 
     Handle homeProcess = 0;
     if (!PLUGIN_coin_LockHomeState(&homeProcess))
     {
-        COIN_HOST__FSFILE_Close(file);
-        COIN_HOST__FSUSER_CloseArchive(archive);
+        PLUGIN_coin_CloseFileArchive(file, archive);
         return (Result)-1;
     }
 
@@ -1133,8 +1119,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UpdatePlayCoins(void)
     }
 
     bool unlocked = PLUGIN_coin_UnlockHomeState(homeProcess);
-    COIN_HOST__FSFILE_Close(file);
-    COIN_HOST__FSUSER_CloseArchive(archive);
+    PLUGIN_coin_CloseFileArchive(file, archive);
     if (!unlocked)
         return (Result)-1;
     return res;
@@ -1145,35 +1130,16 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_SetPlayCoins(u16 amount)
     FS_Archive archive; //extdata archive
     Handle file; //gamecoin file handle
     Result res; //result variable
-    FS_Path pathData;
-
-    pathData.type = PATH_BINARY; //binary path because titleid
-    pathData.size = sizeof(g_gameCoinArchivePath); //3*sizeof(u32)
-    pathData.data = g_gameCoinArchivePath; //data
-    // shared NAND extdata 0xf000000b
-    res = COIN_HOST__FSUSER_OpenArchive(&archive, ARCHIVE_SHARED_EXTDATA, pathData);
-    if (R_FAILED(res)) //return if error
-        return res;
 
     // open Nintendo's /gamecoin.dat
-    res = COIN_HOST__FSUSER_OpenFile(
-        &file,
-        archive,
-        COIN_HOST__fsMakePath(PATH_ASCII, g_gameCoinPath),
-        FS_OPEN_WRITE,
-        0
-    ); //open for writing, no attributes necessary
+    res = PLUGIN_coin_OpenGameCoinFile(&archive, &file, FS_OPEN_WRITE);
     if (R_FAILED(res)) //return if error
-    {
-        COIN_HOST__FSUSER_CloseArchive(archive);
         return res;
-    }
 
     Handle homeProcess = 0;
     if (!PLUGIN_coin_LockHomeState(&homeProcess))
     {
-        COIN_HOST__FSFILE_Close(file);
-        COIN_HOST__FSUSER_CloseArchive(archive);
+        PLUGIN_coin_CloseFileArchive(file, archive);
         return (Result)-1;
     }
 
@@ -1195,8 +1161,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_SetPlayCoins(u16 amount)
     if (R_FAILED(res))
     {
         (void)PLUGIN_coin_UnlockHomeState(homeProcess);
-        COIN_HOST__FSFILE_Close(file);
-        COIN_HOST__FSUSER_CloseArchive(archive);
+        PLUGIN_coin_CloseFileArchive(file, archive);
         return res;
     }
 
@@ -1324,7 +1289,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RemoveBuiltInMenuItem(void)
         MenuItem *item = &menu->items[i];
         if (item->action_type == METHOD &&
             item->method != PLUGIN_coin_EditPlayCoins &&
-            PLUGIN_coin_StringEquals(item->title, g_coinBuiltInMenuTitle))
+            PLUGIN_coin_StringEquals(item->title, g_coinSetCoinsItem))
         {
             u32 j = i;
             while (j + 1u < COIN_MAX_MISC_ITEMS)

@@ -27,7 +27,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_CheckBalanceAchievements(void)
     if (!g_coinAchievementsEnabled)
         return;
 
-    u32 qualified = PLUGIN_coin_GetBlackjackQualifiedCounter();
+    u32 qualified = PLUGIN_coin_GetBlackjackQualified();
 
     PLUGIN_coin_TryAchievement(0u,
         PLUGIN_coin_MeetsBalanceMilestone(301u) && coinsTrue >= 301u);
@@ -120,21 +120,6 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_HasU16Terminator(const u16 *text, u32 
     }
 
     return false;
-}
-
-PLUGIN_CODE(coin) static const char *PLUGIN_coin_PackedAssetPath(u32 assetIndex)
-{
-    // branches stop GCC making a host rodata pointer table
-    if (assetIndex < COIN_ASSET_MEDIUMTOP)
-    {
-        if (assetIndex < COIN_ASSET_ACHV)
-            return assetIndex == COIN_ASSET_ICN ? g_coinIcnPath : NULL;
-        return assetIndex == COIN_ASSET_ACHV ? g_coinAchievementPath : g_coinEasyTopImagePath;
-    }
-
-    if (assetIndex < COIN_ASSET_EXTREMTOP)
-        return assetIndex == COIN_ASSET_MEDIUMTOP ? g_coinMediumTopImagePath : g_coinHardTopImagePath;
-    return assetIndex == COIN_ASSET_EXTREMTOP ? g_coinExtremeTopImagePath : NULL;
 }
 
 PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadExactFile(
@@ -392,7 +377,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UnpackAssetMaskWithContext(
                 source,
                 locations[i].dataOffset,
                 locations[i].dataSize,
-                PLUGIN_coin_PackedAssetPath(i)
+                g_coinPackedAssetPaths[i]
             );
         }
         else
@@ -401,7 +386,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UnpackAssetMaskWithContext(
                 source,
                 locations[i].dataOffset,
                 locations[i].dataSize,
-                PLUGIN_coin_PackedAssetPath(i),
+                g_coinPackedAssetPaths[i],
                 scratch
             );
         }
@@ -414,7 +399,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_UnpackAssetMaskWithContext(
         u32 installedVersion = 0;
         if (!PLUGIN_coin_GetInstalledAssetVersion(
                 source->archive,
-                PLUGIN_coin_PackedAssetPath(i),
+                g_coinPackedAssetPaths[i],
                 &installedVersion) ||
             installedVersion != locations[i].version)
         {
@@ -464,7 +449,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_EnsurePackedAssets(void)
         u32 installedVersion = 0;
         if (!PLUGIN_coin_GetInstalledAssetVersion(
                 source.archive,
-                PLUGIN_coin_PackedAssetPath(i),
+                g_coinPackedAssetPaths[i],
                 &installedVersion) ||
             installedVersion != locations[i].version)
         {
@@ -479,6 +464,34 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_EnsurePackedAssets(void)
     return rc;
 }
 
+PLUGIN_CODE(coin) static Result PLUGIN_coin_OpenSdFile(
+    FS_Archive *archive,
+    Handle *file,
+    const char *path,
+    u32 openFlags
+)
+{
+    *file = 0;
+    Result rc = COIN_HOST__FSUSER_OpenArchive(
+        archive,
+        ARCHIVE_SDMC,
+        COIN_HOST__fsMakePath(PATH_EMPTY, NULL)
+    );
+    if (R_FAILED(rc))
+        return rc;
+
+    rc = COIN_HOST__FSUSER_OpenFile(
+        file,
+        *archive,
+        COIN_HOST__fsMakePath(PATH_ASCII, path),
+        openFlags,
+        0
+    );
+    if (R_FAILED(rc))
+        COIN_HOST__FSUSER_CloseArchive(*archive);
+    return rc;
+}
+
 PLUGIN_CODE(coin) static Result PLUGIN_coin_ReadAchievement(
     u32 achievementIndex,
     CoinAchievement *achievement
@@ -488,24 +501,15 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_ReadAchievement(
         return (Result)-26;
 
     FS_Archive sd;
-    Handle file = 0;
-    Result rc = COIN_HOST__FSUSER_OpenArchive(
+    Handle file;
+    Result rc = PLUGIN_coin_OpenSdFile(
         &sd,
-        ARCHIVE_SDMC,
-        COIN_HOST__fsMakePath(PATH_EMPTY, NULL)
+        &file,
+        g_coinAchievementPath,
+        FS_OPEN_READ
     );
     if (R_FAILED(rc))
         return rc;
-
-    rc = COIN_HOST__FSUSER_OpenFile(
-        &file,
-        sd,
-        COIN_HOST__fsMakePath(PATH_ASCII, g_coinAchievementPath),
-        FS_OPEN_READ,
-        0
-    );
-    if (R_FAILED(rc))
-        goto cleanup_archive;
 
     u64 fileSize = 0;
     rc = COIN_HOST__FSFILE_GetSize(file, &fileSize);
@@ -589,9 +593,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_ReadAchievement(
     rc = 0;
 
 cleanup_file:
-    COIN_HOST__FSFILE_Close(file);
-cleanup_archive:
-    COIN_HOST__FSUSER_CloseArchive(sd);
+    PLUGIN_coin_CloseFileArchive(file, sd);
     return rc;
 }
 
@@ -601,24 +603,15 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_RecordAchievementEarned(u32 achievem
         return (Result)-26;
 
     FS_Archive sd;
-    Handle file = 0;
-    Result rc = COIN_HOST__FSUSER_OpenArchive(
+    Handle file;
+    Result rc = PLUGIN_coin_OpenSdFile(
         &sd,
-        ARCHIVE_SDMC,
-        COIN_HOST__fsMakePath(PATH_EMPTY, NULL)
+        &file,
+        g_coinFilePath,
+        FS_OPEN_READ | FS_OPEN_WRITE
     );
     if (R_FAILED(rc))
         return rc;
-
-    rc = COIN_HOST__FSUSER_OpenFile(
-        &file,
-        sd,
-        COIN_HOST__fsMakePath(PATH_ASCII, g_coinFilePath),
-        FS_OPEN_READ | FS_OPEN_WRITE,
-        0
-    );
-    if (R_FAILED(rc))
-        goto cleanup_archive;
 
     u64 fileSize = 0;
     rc = COIN_HOST__FSFILE_GetSize(file, &fileSize);
@@ -690,9 +683,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_RecordAchievementEarned(u32 achievem
     }
 
 cleanup_file:
-    COIN_HOST__FSFILE_Close(file);
-cleanup_archive:
-    COIN_HOST__FSUSER_CloseArchive(sd);
+    PLUGIN_coin_CloseFileArchive(file, sd);
     return rc;
 }
 
@@ -703,24 +694,15 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_ReadAchievementEarnedMask(u32 *outMa
 
     *outMask = 0;
     FS_Archive sd;
-    Handle file = 0;
-    Result rc = COIN_HOST__FSUSER_OpenArchive(
+    Handle file;
+    Result rc = PLUGIN_coin_OpenSdFile(
         &sd,
-        ARCHIVE_SDMC,
-        COIN_HOST__fsMakePath(PATH_EMPTY, NULL)
+        &file,
+        g_coinFilePath,
+        FS_OPEN_READ
     );
     if (R_FAILED(rc))
         return rc;
-
-    rc = COIN_HOST__FSUSER_OpenFile(
-        &file,
-        sd,
-        COIN_HOST__fsMakePath(PATH_ASCII, g_coinFilePath),
-        FS_OPEN_READ,
-        0
-    );
-    if (R_FAILED(rc))
-        goto cleanup_archive;
 
     u64 fileSize = 0;
     rc = COIN_HOST__FSFILE_GetSize(file, &fileSize);
@@ -762,9 +744,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_ReadAchievementEarnedMask(u32 *outMa
     rc = 0;
 
 cleanup_file:
-    COIN_HOST__FSFILE_Close(file);
-cleanup_archive:
-    COIN_HOST__FSUSER_CloseArchive(sd);
+    PLUGIN_coin_CloseFileArchive(file, sd);
     return rc;
 }
 #elif defined(PLAYCOIN_SECRETS_NEWS)
@@ -921,16 +901,6 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_EndNewsLedWindow(void)
     return PLUGIN_coin_ReleaseNotificationScratch();
 }
 
-PLUGIN_CODE(coin) static const char *PLUGIN_coin_AchievementImagePackPath(u32 difficulty)
-{
-    // branch it out so GCC doesnt invent a stray pointer table
-    if (difficulty < 2u)
-        return difficulty == 0u ? g_coinEasyTopImagePath : g_coinMediumTopImagePath;
-    if (difficulty < 4u)
-        return difficulty == 2u ? g_coinHardTopImagePath : g_coinExtremeTopImagePath;
-    return NULL;
-}
-
 PLUGIN_CODE(coin) static Result PLUGIN_coin_LoadAchievementImage(
     const CoinAchievement *achievement,
     u32 *outImageSize
@@ -939,29 +909,18 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_LoadAchievementImage(
     if (!achievement || !outImageSize || achievement->difficulty > 3u)
         return (Result)-25;
 
-    const char *packPath = PLUGIN_coin_AchievementImagePackPath(achievement->difficulty);
-    if (!packPath)
-        return (Result)-25;
+    const char *packPath = g_coinAchievementImagePackPaths[achievement->difficulty];
 
     FS_Archive sd;
-    Handle file = 0;
-    Result rc = COIN_HOST__FSUSER_OpenArchive(
+    Handle file;
+    Result rc = PLUGIN_coin_OpenSdFile(
         &sd,
-        ARCHIVE_SDMC,
-        COIN_HOST__fsMakePath(PATH_EMPTY, NULL)
+        &file,
+        packPath,
+        FS_OPEN_READ
     );
     if (R_FAILED(rc))
         return rc;
-
-    rc = COIN_HOST__FSUSER_OpenFile(
-        &file,
-        sd,
-        COIN_HOST__fsMakePath(PATH_ASCII, packPath),
-        FS_OPEN_READ,
-        0
-    );
-    if (R_FAILED(rc))
-        goto cleanup_archive;
 
     u64 fileSize = 0;
     rc = COIN_HOST__FSFILE_GetSize(file, &fileSize);
@@ -1072,7 +1031,6 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_LoadAchievementImage(
 cleanup_file:
     if (file)
         COIN_HOST__FSFILE_Close(file);
-cleanup_archive:
     COIN_HOST__FSUSER_CloseArchive(sd);
     return rc;
 }
@@ -1122,9 +1080,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_SendDiagnosticNotification(
         hdr.title[i] = achievement->title[i];
     hdr.title[titleLen] = 0;
 
-    u8 *tls;
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tls));
-    u32 *cmdbuf = (u32*)(tls + 0x80);
+    u32 *cmdbuf = PLUGIN_coin_CommandBuffer();
     u32 messageSize = (PLUGIN_coin_U16Len(achievement->notificationMessage) + 1u) * sizeof(u16);
 
     cmdbuf[0] = IPC_MakeHeader(0x1, 3, 6);
@@ -1144,23 +1100,16 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_SendDiagnosticNotification(
     COIN_HOST__svcCloseHandle(newsHandle);
     return rc;
 }
-PLUGIN_CODE(coin) static u32 *PLUGIN_coin_NewsDumpCommandBuffer(void)
+PLUGIN_CODE(coin) static u32 *PLUGIN_coin_CommandBuffer(void)
 {
     u32 *cmdbuf;
     __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(cmdbuf));
     return (u32 *)((u8 *)cmdbuf + 0x80);
 }
 
-PLUGIN_CODE(coin) static void PLUGIN_coin_NewsDumpZero(void *ptr, u32 size)
-{
-    volatile u8 *p = (volatile u8 *)ptr;
-    for (u32 i = 0; i < size; i++)
-        p[i] = 0;
-}
-
 PLUGIN_CODE(coin) static Result PLUGIN_coin_NewsDumpGetTotal(Handle news, u32 *out)
 {
-    u32 *cmdbuf = PLUGIN_coin_NewsDumpCommandBuffer();
+    u32 *cmdbuf = PLUGIN_coin_CommandBuffer();
     cmdbuf[0] = IPC_MakeHeader(0x5, 0, 0);
     Result rc = COIN_HOST__svcSendSyncRequest(news);
     if (R_SUCCEEDED(rc))
@@ -1172,40 +1121,13 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_NewsDumpGetTotal(Handle news, u32 *o
     return rc;
 }
 
-PLUGIN_CODE(coin) static Result PLUGIN_coin_NewsDumpGetTotalArrived(Handle news, u32 *out)
-{
-    u32 *cmdbuf = PLUGIN_coin_NewsDumpCommandBuffer();
-    cmdbuf[0] = IPC_MakeHeader(0x14, 0, 0);
-    Result rc = COIN_HOST__svcSendSyncRequest(news);
-    if (R_SUCCEEDED(rc))
-    {
-        rc = (Result)cmdbuf[1];
-        if (R_SUCCEEDED(rc))
-            *out = cmdbuf[2];
-    }
-    return rc;
-}
-
-PLUGIN_CODE(coin) static Result PLUGIN_coin_NewsDumpGetDbHeader(Handle news, u8 out[0x10])
-{
-    u32 *cmdbuf = PLUGIN_coin_NewsDumpCommandBuffer();
-    cmdbuf[0] = IPC_MakeHeader(0xA, 1, 2);
-    cmdbuf[1] = 0x10;
-    cmdbuf[2] = IPC_Desc_Buffer(0x10, IPC_BUFFER_W);
-    cmdbuf[3] = (u32)out;
-    Result rc = COIN_HOST__svcSendSyncRequest(news);
-    if (R_SUCCEEDED(rc))
-        rc = (Result)cmdbuf[1];
-    return rc;
-}
-
 PLUGIN_CODE(coin) static Result PLUGIN_coin_NewsDumpGetHeader(
     Handle news,
     u32 slot,
     NotificationHeader *out
 )
 {
-    u32 *cmdbuf = PLUGIN_coin_NewsDumpCommandBuffer();
+    u32 *cmdbuf = PLUGIN_coin_CommandBuffer();
     cmdbuf[0] = IPC_MakeHeader(0xB, 2, 2);
     cmdbuf[1] = slot;
     cmdbuf[2] = sizeof(NotificationHeader);
@@ -1217,234 +1139,9 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_NewsDumpGetHeader(
     return rc;
 }
 
-PLUGIN_CODE(coin) static Result PLUGIN_coin_NewsDumpGetMessage(
-    Handle news,
-    u32 slot,
-    void *out,
-    u32 *outSize
-)
-{
-    u32 *cmdbuf = PLUGIN_coin_NewsDumpCommandBuffer();
-    cmdbuf[0] = IPC_MakeHeader(0xC, 2, 2);
-    cmdbuf[1] = slot;
-    cmdbuf[2] = 0x1780;
-    cmdbuf[3] = IPC_Desc_Buffer(0x1780, IPC_BUFFER_W);
-    cmdbuf[4] = (u32)out;
-    Result rc = COIN_HOST__svcSendSyncRequest(news);
-    if (R_SUCCEEDED(rc))
-    {
-        rc = (Result)cmdbuf[1];
-        if (R_SUCCEEDED(rc))
-        {
-            u32 size = cmdbuf[2];
-            *outSize = size <= 0x1780 ? size : 0x1780;
-        }
-    }
-    return rc;
-}
-
-PLUGIN_CODE(coin) static Result PLUGIN_coin_NewsDumpWrite(
-    Handle file,
-    u64 *offset,
-    const void *data,
-    u32 size,
-    u32 flags
-)
-{
-    u32 written = 0;
-    Result rc = COIN_HOST__FSFILE_Write(file, &written, *offset, data, size, flags);
-    if (R_FAILED(rc))
-        return rc;
-    if (written != size)
-        return (Result)0xD900182Fu;
-    *offset += written;
-    return 0;
-}
-
-PLUGIN_CODE(coin) static Result PLUGIN_coin_OpenNextNewsDump(FS_Archive sd, Handle *outFile)
-{
-    (void)COIN_HOST__FSUSER_CreateDirectory(
-        sd,
-        COIN_HOST__fsMakePath(PATH_ASCII, g_lumaPath),
-        0
-    );
-
-    u32 tens = 0;
-    u32 ones = 0;
-    for (u32 i = 0; i < 100; i++)
-    {
-        g_coinNewsDumpPath[14] = (char)('0' + tens);
-        g_coinNewsDumpPath[15] = (char)('0' + ones);
-
-        Handle probe = 0;
-        Result rc = COIN_HOST__FSUSER_OpenFile(
-            &probe,
-            sd,
-            COIN_HOST__fsMakePath(PATH_ASCII, g_coinNewsDumpPath),
-            FS_OPEN_READ,
-            0
-        );
-
-        if (R_SUCCEEDED(rc))
-        {
-            COIN_HOST__FSFILE_Close(probe);
-            ones++;
-            if (ones == 10)
-            {
-                ones = 0;
-                tens++;
-            }
-            continue;
-        }
-
-        return COIN_HOST__FSUSER_OpenFile(
-            outFile,
-            sd,
-            COIN_HOST__fsMakePath(PATH_ASCII, g_coinNewsDumpPath),
-            FS_OPEN_WRITE | FS_OPEN_CREATE,
-            0
-        );
-    }
-
-    return (Result)0xD900182Fu;
-}
-
-PLUGIN_CODE(coin) static Result PLUGIN_coin_DumpNewsDb(void)
-{
-    // dump NEWS through news:s, not its system save archive
-    FS_Archive sd;
-    Handle file = 0;
-    Handle news = 0;
-    u64 offset = 0;
-
-    Result rc = COIN_HOST__FSUSER_OpenArchive(
-        &sd,
-        ARCHIVE_SDMC,
-        COIN_HOST__fsMakePath(PATH_EMPTY, NULL)
-    );
-    if (R_FAILED(rc))
-        return rc;
-
-    rc = PLUGIN_coin_OpenNextNewsDump(sd, &file);
-    if (R_FAILED(rc))
-    {
-        COIN_HOST__FSUSER_CloseArchive(sd);
-        return rc;
-    }
-
-    CoinNewsDumpHeader dump;
-    PLUGIN_coin_NewsDumpZero(&dump, sizeof(dump));
-    dump.magic[0] = 'N';
-    dump.magic[1] = 'W';
-    dump.magic[2] = 'S';
-    dump.magic[3] = 'D';
-    dump.magic[4] = 'M';
-    dump.magic[5] = 'P';
-    dump.magic[6] = '1';
-    dump.formatVersion = 1;
-    dump.slotsScanned = 100;
-    dump.recordSize = sizeof(CoinNewsDumpRecord);
-    dump.maxMessageSize = 0x1780;
-
-    dump.serviceResult = COIN_HOST__srvGetServiceHandle(&news, g_coinNewsServiceName);
-    if (R_SUCCEEDED(dump.serviceResult))
-    {
-        dump.totalResult = PLUGIN_coin_NewsDumpGetTotal(news, &dump.totalNotifications);
-        dump.arrivedResult = PLUGIN_coin_NewsDumpGetTotalArrived(news, &dump.totalArrived);
-        dump.dbHeaderResult = PLUGIN_coin_NewsDumpGetDbHeader(news, dump.dbHeader);
-    }
-
-    rc = PLUGIN_coin_NewsDumpWrite(file, &offset, &dump, sizeof(dump), 0);
-    if (R_FAILED(rc))
-        goto done;
-
-    if (R_FAILED(dump.serviceResult))
-    {
-        rc = dump.serviceResult;
-        goto done;
-    }
-
-    for (u32 slot = 0; slot < 100; slot++)
-    {
-        CoinNewsDumpRecord rec;
-        PLUGIN_coin_NewsDumpZero(&rec, sizeof(rec));
-        rec.slot = slot;
-        rec.messageResult = (Result)-1;
-
-        rec.headerResult = PLUGIN_coin_NewsDumpGetHeader(news, slot, &rec.header);
-        if (R_SUCCEEDED(rec.headerResult))
-        {
-            rec.messageResult = PLUGIN_coin_NewsDumpGetMessage(
-                news,
-                slot,
-                g_coinNewsMessageBuffer,
-                &rec.messageSize
-            );
-            if (R_FAILED(rec.messageResult))
-                rec.messageSize = 0;
-        }
-
-        rc = PLUGIN_coin_NewsDumpWrite(file, &offset, &rec, sizeof(rec), 0);
-        if (R_FAILED(rc))
-            goto done;
-
-        if (rec.messageSize)
-        {
-            rc = PLUGIN_coin_NewsDumpWrite(
-                file,
-                &offset,
-                g_coinNewsMessageBuffer,
-                rec.messageSize,
-                0
-            );
-            if (R_FAILED(rc))
-                goto done;
-        }
-    }
-
-done:
-    if (news)
-        COIN_HOST__svcCloseHandle(news);
-
-    if (file)
-    {
-        u32 footer = 0x21444E45u; // "END!"
-        if (R_SUCCEEDED(rc))
-            rc = PLUGIN_coin_NewsDumpWrite(file, &offset, &footer, sizeof(footer), FS_WRITE_FLUSH);
-        COIN_HOST__FSFILE_Close(file);
-    }
-
-    COIN_HOST__FSUSER_CloseArchive(sd);
-    return rc;
-}
-
-PLUGIN_CODE(coin) static Result PLUGIN_coin_GetNewsHeader(
-    Handle newsHandle,
-    u32 newsId,
-    NotificationHeader *header
-)
-{
-    u8 *tls;
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tls));
-    u32 *cmdbuf = (u32*)(tls + 0x80);
-
-    cmdbuf[0] = IPC_MakeHeader(0xBu, 2, 2);
-    cmdbuf[1] = newsId;
-    cmdbuf[2] = sizeof(NotificationHeader);
-    cmdbuf[3] = IPC_Desc_Buffer(sizeof(NotificationHeader), IPC_BUFFER_W);
-    cmdbuf[4] = (u32)header;
-
-    Result rc = COIN_HOST__svcSendSyncRequest(newsHandle);
-    if (R_SUCCEEDED(rc))
-        rc = (Result)cmdbuf[1];
-    return rc;
-}
-
 PLUGIN_CODE(coin) static Result PLUGIN_coin_WriteNewsDbSavedata(Handle newsHandle)
 {
-    u8 *tls;
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tls));
-    u32 *cmdbuf = (u32*)(tls + 0x80);
+    u32 *cmdbuf = PLUGIN_coin_CommandBuffer();
 
     cmdbuf[0] = IPC_MakeHeader(0x13u, 0, 0);
     Result rc = COIN_HOST__svcSendSyncRequest(newsHandle);
@@ -1476,19 +1173,6 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_RawHeaderKeyEquals(
     if (raw->processID != expected->processID || raw->time != expected->time)
         return false;
     return PLUGIN_coin_RawTitleEquals(raw->title, expected->title);
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_RawHeaderHasBlankIdentity(
-    volatile const NotificationHeader *header
-)
-{
-    if (!header || header->processID || header->time)
-        return false;
-
-    for (u32 i = 0; i < 32u; i++)
-        if (header->title[i])
-            return false;
-    return true;
 }
 
 PLUGIN_CODE(coin) static volatile NotificationHeader *PLUGIN_coin_RawNewsHeader(
@@ -1593,12 +1277,15 @@ PLUGIN_CODE(coin) static volatile u8 *PLUGIN_coin_FindRawNewsDb(
     return foundDb;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateIdPermutation32(volatile const u32 *ids)
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateIdPermutation(
+    volatile const u8 *ids,
+    u32 width
+)
 {
     u32 seen0 = 0, seen1 = 0, seen2 = 0, seen3 = 0;
     for (u32 i = 0; i < COIN_NEWS_MAX_NOTIFICATIONS; i++)
     {
-        u32 id = ids[i];
+        u32 id = width == 4u ? ((volatile const u32*)ids)[i] : ids[i];
         if (id >= COIN_NEWS_MAX_NOTIFICATIONS)
             return false;
         u32 bit = 1u << (id & 31u);
@@ -1627,37 +1314,43 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateIdPermutation32(volatile const
     return true;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateIdPermutation8(volatile const u8 *ids)
+PLUGIN_CODE(coin) static bool PLUGIN_coin_FindNewsIdArrayWidth(
+    u32 mappedStart,
+    u32 mappedEnd,
+    const u32 *physicalIds,
+    u32 width,
+    volatile u8 **outFound
+)
 {
-    u32 seen0 = 0, seen1 = 0, seen2 = 0, seen3 = 0;
-    for (u32 i = 0; i < COIN_NEWS_MAX_NOTIFICATIONS; i++)
+    u32 alignMask = width - 1u;
+    u32 span = COIN_NEWS_MAX_NOTIFICATIONS * width;
+    volatile u8 *found = *outFound;
+
+    for (u32 addr = (mappedStart + alignMask) & ~alignMask;
+         addr + span <= mappedEnd;
+         addr += width)
     {
-        u32 id = ids[i];
-        if (id >= COIN_NEWS_MAX_NOTIFICATIONS)
+        volatile u8 *ids = (volatile u8*)addr;
+        bool anchorsMatch = true;
+        for (u32 a = 0; a < g_coinNewsAnchorCount; a++)
+        {
+            u32 logical = g_coinNewsAnchors[a].logicalIndex;
+            u32 id = width == 4u ? ((volatile u32*)ids)[logical] : ids[logical];
+            if (id != physicalIds[a])
+            {
+                anchorsMatch = false;
+                break;
+            }
+        }
+        if (!anchorsMatch || !PLUGIN_coin_ValidateIdPermutation(ids, width))
+            continue;
+
+        if (found && found != ids)
             return false;
-        u32 bit = 1u << (id & 31u);
-        u32 word = id >> 5;
-        if (word == 0u)
-        {
-            if (seen0 & bit) return false;
-            seen0 |= bit;
-        }
-        else if (word == 1u)
-        {
-            if (seen1 & bit) return false;
-            seen1 |= bit;
-        }
-        else if (word == 2u)
-        {
-            if (seen2 & bit) return false;
-            seen2 |= bit;
-        }
-        else
-        {
-            if (seen3 & bit) return false;
-            seen3 |= bit;
-        }
+        found = ids;
     }
+
+    *outFound = found;
     return true;
 }
 
@@ -1669,55 +1362,22 @@ PLUGIN_CODE(coin) static volatile u8 *PLUGIN_coin_FindNewsIdArray(
 )
 {
     volatile u8 *found = NULL;
-    u32 foundWidth = 0;
-
-    for (u32 addr = (mappedStart + 3u) & ~3u;
-         addr + COIN_NEWS_MAX_NOTIFICATIONS * sizeof(u32) <= mappedEnd;
-         addr += 4u)
+    if (!PLUGIN_coin_FindNewsIdArrayWidth(
+            mappedStart, mappedEnd, physicalIds, 4u, &found))
     {
-        volatile u32 *ids = (volatile u32*)addr;
-        bool anchorsMatch = true;
-        for (u32 a = 0; a < g_coinNewsAnchorCount; a++)
-        {
-            if (ids[g_coinNewsAnchors[a].logicalIndex] != physicalIds[a])
-            {
-                anchorsMatch = false;
-                break;
-            }
-        }
-        if (!anchorsMatch || !PLUGIN_coin_ValidateIdPermutation32(ids))
-            continue;
-
-        if (found && found != (volatile u8*)ids)
-            return NULL;
-        found = (volatile u8*)ids;
-        foundWidth = 4u;
+        return NULL;
     }
 
+    u32 foundWidth = found ? 4u : 0u;
     if (!found)
     {
-        for (u32 addr = mappedStart;
-             addr + COIN_NEWS_MAX_NOTIFICATIONS <= mappedEnd;
-             addr++)
+        if (!PLUGIN_coin_FindNewsIdArrayWidth(
+                mappedStart, mappedEnd, physicalIds, 1u, &found))
         {
-            volatile u8 *ids = (volatile u8*)addr;
-            bool anchorsMatch = true;
-            for (u32 a = 0; a < g_coinNewsAnchorCount; a++)
-            {
-                if (ids[g_coinNewsAnchors[a].logicalIndex] != (u8)physicalIds[a])
-                {
-                    anchorsMatch = false;
-                    break;
-                }
-            }
-            if (!anchorsMatch || !PLUGIN_coin_ValidateIdPermutation8(ids))
-                continue;
-
-            if (found && found != ids)
-                return NULL;
-            found = ids;
-            foundWidth = 1u;
+            return NULL;
         }
+        if (found)
+            foundWidth = 1u;
     }
 
     if (found && outWidth)
@@ -1791,31 +1451,6 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_ResortRawNewsIds(
     }
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_RawLogicalSlotIsUnusableZombie(
-    volatile u8 *dbBase,
-    volatile u8 *idBase,
-    u32 width,
-    u32 physicalId
-)
-{
-    volatile NotificationHeader *header = PLUGIN_coin_RawNewsHeader(dbBase, physicalId);
-    if (!header->dataSet || !PLUGIN_coin_RawHeaderHasBlankIdentity(header))
-        return false;
-
-    u32 limit = g_coinNewsExpectedTotal;
-    if (limit > COIN_NEWS_MAX_NOTIFICATIONS)
-        limit = COIN_NEWS_MAX_NOTIFICATIONS;
-
-    for (u32 logical = 0; logical < limit; logical++)
-    {
-        if (g_coinNewsLogicalResults[logical] != COIN_NEWS_UNUSABLE_SLOT_RESULT)
-            continue;
-        if (PLUGIN_coin_NewsIdGet(idBase, width, logical) == physicalId)
-            return true;
-    }
-    return false;
-}
-
 PLUGIN_CODE(coin) static Result PLUGIN_coin_RawDeleteNewsCallback(
     Handle processHandle,
     u32 textSize,
@@ -1858,28 +1493,11 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_RawDeleteNewsCallback(
         if (!header->dataSet)
             continue;
 
-        bool remove = false;
-        if (g_coinNewsRawDeleteMode == COIN_NEWS_RAW_DELETE_SPECIFIC)
+        if ((u32)header->processID != COIN_PLUGIN_ID ||
+            !PLUGIN_coin_RawTitleEquals(header->title, g_coinNewsRawDeleteTitle))
         {
-            remove = (u32)header->processID == COIN_PLUGIN_ID &&
-                PLUGIN_coin_RawTitleEquals(header->title, g_coinNewsRawDeleteTitle);
-        }
-        else if (g_coinNewsRawDeleteMode == COIN_NEWS_RAW_DELETE_ALL)
-        {
-            remove = (u32)header->processID == COIN_PLUGIN_ID;
-            if (!remove)
-            {
-                remove = PLUGIN_coin_RawLogicalSlotIsUnusableZombie(
-                    dbBase,
-                    idBase,
-                    idWidth,
-                    physical
-                );
-            }
-        }
-
-        if (!remove)
             continue;
+        }
 
         volatile u8 *bytes = (volatile u8*)header;
         for (u32 i = 0; i < sizeof(NotificationHeader); i++)
@@ -1896,19 +1514,11 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_RawDeleteNewsCallback(
     return 0;
 }
 
-PLUGIN_CODE(coin) static Result PLUGIN_coin_PrepareRawNewsDelete(
-    Handle newsHandle,
-    u32 mode,
-    const u16 *specificTitle
-)
+PLUGIN_CODE(coin) static Result PLUGIN_coin_PrepareRawNewsDelete(Handle newsHandle)
 {
     g_coinNewsAnchorCount = 0;
     g_coinNewsExpectedTotal = 0;
-    g_coinNewsRawDeleteMode = mode;
     g_coinNewsRawRemoved = 0;
-
-    for (u32 i = 0; i < 32u; i++)
-        g_coinNewsRawDeleteTitle[i] = specificTitle ? specificTitle[i] : 0;
 
     Result rc = PLUGIN_coin_NewsDumpGetTotal(newsHandle, &g_coinNewsExpectedTotal);
     if (R_FAILED(rc))
@@ -1919,8 +1529,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_PrepareRawNewsDelete(
     for (u32 logical = 0; logical < COIN_NEWS_MAX_NOTIFICATIONS; logical++)
     {
         NotificationHeader header;
-        rc = PLUGIN_coin_GetNewsHeader(newsHandle, logical, &header);
-        g_coinNewsLogicalResults[logical] = rc;
+        rc = PLUGIN_coin_NewsDumpGetHeader(newsHandle, logical, &header);
 
         if (R_SUCCEEDED(rc))
         {
@@ -1950,7 +1559,6 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_PrepareRawNewsDelete(
 }
 
 PLUGIN_CODE(coin) static Result PLUGIN_coin_DeleteNewsRaw(
-    u32 mode,
     const u16 *specificTitle,
     u32 *outRemoved
 )
@@ -1959,8 +1567,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_DeleteNewsRaw(
     if (!COIN_MENU__TempAlloc(0x1000u, &scratchBase))
         return (Result)-8;
     g_coinNewsAnchors = (CoinNewsAnchor *)scratchBase;
-    g_coinNewsLogicalResults = (Result *)(scratchBase + sizeof(CoinNewsAnchor) * COIN_NEWS_ANCHOR_MAX);
-    g_coinNewsRawDeleteTitle = (u16 *)((u8 *)g_coinNewsLogicalResults + sizeof(Result) * COIN_NEWS_MAX_NOTIFICATIONS);
+    g_coinNewsRawDeleteTitle = specificTitle;
 
     if (outRemoved)
         *outRemoved = 0;
@@ -1970,7 +1577,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_DeleteNewsRaw(
     if (R_FAILED(rc))
         goto cleanup_scratch;
 
-    rc = PLUGIN_coin_PrepareRawNewsDelete(newsHandle, mode, specificTitle);
+    rc = PLUGIN_coin_PrepareRawNewsDelete(newsHandle);
     if (R_FAILED(rc) || !g_coinNewsExpectedTotal)
         goto cleanup;
 
@@ -1998,7 +1605,6 @@ cleanup:
         *outRemoved = g_coinNewsRawRemoved;
 cleanup_scratch:
     g_coinNewsAnchors = NULL;
-    g_coinNewsLogicalResults = NULL;
     g_coinNewsRawDeleteTitle = NULL;
     COIN_MENU__TempFree(scratchBase, 0x1000u);
     return rc;
@@ -2043,11 +1649,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_ScanAchievementNews(
     }
 
     if (deleteMatches)
-        return PLUGIN_coin_DeleteNewsRaw(
-            COIN_NEWS_RAW_DELETE_SPECIFIC,
-            achievement.title,
-            outMatches
-        );
+        return PLUGIN_coin_DeleteNewsRaw(achievement.title, outMatches);
 
     Handle newsHandle = 0;
     rc = COIN_HOST__srvGetServiceHandle(&newsHandle, g_coinNewsServiceName);
@@ -2059,7 +1661,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_ScanAchievementNews(
     for (u32 newsId = 0; newsId < COIN_NEWS_MAX_NOTIFICATIONS; newsId++)
     {
         NotificationHeader header;
-        rc = PLUGIN_coin_GetNewsHeader(newsHandle, newsId, &header);
+        rc = PLUGIN_coin_NewsDumpGetHeader(newsHandle, newsId, &header);
         if (rc == COIN_NEWS_EMPTY_SLOT_RESULT ||
             rc == COIN_NEWS_UNUSABLE_SLOT_RESULT)
             continue;
@@ -2076,12 +1678,6 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_ScanAchievementNews(
     if (outMatches)
         *outMatches = matches;
     return scanRc;
-}
-
-PLUGIN_CODE(coin) static Result PLUGIN_coin_WipeCoinNews(u32 *outRemoved)
-{
-    // raw delete avoids the zombie slots left by NEWS's public header setter
-    return PLUGIN_coin_DeleteNewsRaw(COIN_NEWS_RAW_DELETE_ALL, NULL, outRemoved);
 }
 
 PLUGIN_CODE(coin) static u32 PLUGIN_coin_FirstPendingAchievement(u32 mask)

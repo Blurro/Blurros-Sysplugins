@@ -47,17 +47,6 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_DecryptWithKey(
     return true;
 }
 
-PLUGIN_CODE(coin) static void PLUGIN_coin_Encrypt(
-    u32 coins,
-    u32 *outEncrypted,
-    u32 *outChecksum,
-    u32 *outKey
-)
-{
-    *outKey = g_coinKey;
-    PLUGIN_coin_EncryptWithKey(coins, g_coinKey, outEncrypted, outChecksum);
-}
-
 PLUGIN_CODE(coin) static void PLUGIN_coin_ResetExtendedData(void)
 {
     volatile u32 *data = g_coinExtendedData;
@@ -90,12 +79,12 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_SaturatingAdd(u32 left, u32 right)
     return sum < left ? 0xFFFFFFFFu : sum;
 }
 
-PLUGIN_CODE(coin) static u16 PLUGIN_coin_GetBlackjackDepositedCounter(void)
+PLUGIN_CODE(coin) u32 PLUGIN_coin_GetBlackjackDeposited(void)
 {
     return (u16)g_coinExtendedData[COIN_EXT_BLACKJACK_COUNTERS_WORD];
 }
 
-PLUGIN_CODE(coin) static u16 PLUGIN_coin_GetBlackjackQualifiedCounter(void)
+PLUGIN_CODE(coin) u32 PLUGIN_coin_GetBlackjackQualified(void)
 {
     return (u16)(g_coinExtendedData[COIN_EXT_BLACKJACK_COUNTERS_WORD] >> 16);
 }
@@ -114,7 +103,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_SetBlackjackCounters(
         deposited | (qualified << 16);
 }
 
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_GetBlackjackSurplusCounter(void)
+PLUGIN_CODE(coin) u32 PLUGIN_coin_GetBlackjackSurplus(void)
 {
     return g_coinExtendedData[COIN_EXT_BLACKJACK_SURPLUS_WORD];
 }
@@ -123,7 +112,7 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_EconomyCapacity(void)
 {
     return PLUGIN_coin_SaturatingAdd(
         coinsTrue,
-        PLUGIN_coin_GetBlackjackSurplusCounter()
+        PLUGIN_coin_GetBlackjackSurplus()
     );
 }
 
@@ -161,9 +150,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadDayStepTotal(
         return false;
 
     u64 queryMs = (u64)(dayOrdinal - COIN_Y2K_DAY_ORDINAL) * COIN_DAY_MS;
-    u8 *tls;
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tls));
-    u32 *cmdbuf = (u32*)(tls + 0x80);
+    u32 *cmdbuf = PLUGIN_coin_CommandBuffer();
     cmdbuf[0] = 0x000B00C2u;
     cmdbuf[1] = 24u;
     cmdbuf[2] = (u32)queryMs;
@@ -291,47 +278,59 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_PreparePreviousDayCatchup(
     return COIN_PREVDAY_READY;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_WriteVanillaCoinBalance(u16 amount)
+PLUGIN_CODE(coin) static Result PLUGIN_coin_OpenGameCoinFile(
+    FS_Archive *archive,
+    Handle *file,
+    u32 openFlags
+)
 {
     FS_Path pathData;
     pathData.type = PATH_BINARY;
     pathData.size = sizeof(g_gameCoinArchivePath);
     pathData.data = g_gameCoinArchivePath;
 
-    FS_Archive archive;
     Result rc = COIN_HOST__FSUSER_OpenArchive(
-        &archive,
+        archive,
         ARCHIVE_SHARED_EXTDATA,
         pathData
     );
     if (R_FAILED(rc))
-        return false;
+        return rc;
 
-    Handle file = 0;
     rc = COIN_HOST__FSUSER_OpenFile(
-        &file,
-        archive,
+        file,
+        *archive,
         COIN_HOST__fsMakePath(PATH_ASCII, g_gameCoinPath),
-        FS_OPEN_WRITE,
+        openFlags,
         0
     );
-    if (R_SUCCEEDED(rc))
-    {
-        u32 written = 0;
-        rc = COIN_HOST__FSFILE_Write(
-            file,
-            &written,
-            4,
-            &amount,
-            sizeof(amount),
-            FS_WRITE_FLUSH
-        );
-        if (R_SUCCEEDED(rc) && written != sizeof(amount))
-            rc = (Result)-1;
-        Result closeRc = COIN_HOST__FSFILE_Close(file);
-        if (R_SUCCEEDED(rc) && R_FAILED(closeRc))
-            rc = closeRc;
-    }
+    if (R_FAILED(rc))
+        COIN_HOST__FSUSER_CloseArchive(*archive);
+    return rc;
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_WriteVanillaCoinBalance(u16 amount)
+{
+    FS_Archive archive;
+    Handle file;
+    Result rc = PLUGIN_coin_OpenGameCoinFile(&archive, &file, FS_OPEN_WRITE);
+    if (R_FAILED(rc))
+        return false;
+
+    u32 written = 0;
+    rc = COIN_HOST__FSFILE_Write(
+        file,
+        &written,
+        4,
+        &amount,
+        sizeof(amount),
+        FS_WRITE_FLUSH
+    );
+    if (R_SUCCEEDED(rc) && written != sizeof(amount))
+        rc = (Result)-1;
+    Result closeRc = COIN_HOST__FSFILE_Close(file);
+    if (R_SUCCEEDED(rc) && R_FAILED(closeRc))
+        rc = closeRc;
 
     Result archiveCloseRc = COIN_HOST__FSUSER_CloseArchive(archive);
     if (R_SUCCEEDED(rc) && R_FAILED(archiveCloseRc))
@@ -366,22 +365,6 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ApplyPreviousDayCatchup(
     return true;
 }
 
-// casino hands us finalized whole-coin values
-PLUGIN_CODE(coin) u32 PLUGIN_coin_GetBlackjackDeposited(void)
-{
-    return PLUGIN_coin_GetBlackjackDepositedCounter();
-}
-
-PLUGIN_CODE(coin) u32 PLUGIN_coin_GetBlackjackQualified(void)
-{
-    return PLUGIN_coin_GetBlackjackQualifiedCounter();
-}
-
-PLUGIN_CODE(coin) u32 PLUGIN_coin_GetBlackjackSurplus(void)
-{
-    return PLUGIN_coin_GetBlackjackSurplusCounter();
-}
-
 PLUGIN_CODE(coin) bool PLUGIN_coin_RecordBlackjackDeposit(
     u32 depositedCoins,
     u32 destroyedFeeCoins
@@ -408,8 +391,8 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_RecordBlackjackDeposit(
     coinsEverSpent = PLUGIN_coin_SaturatingAdd(coinsEverSpent, trackedFeeCoins);
 
     u32 backedCoins = trackedCoins - trackedFeeCoins;
-    u32 deposited = PLUGIN_coin_GetBlackjackDepositedCounter();
-    u32 qualified = PLUGIN_coin_GetBlackjackQualifiedCounter();
+    u32 deposited = PLUGIN_coin_GetBlackjackDeposited();
+    u32 qualified = PLUGIN_coin_GetBlackjackQualified();
     deposited = PLUGIN_coin_SaturatingAdd(deposited, backedCoins);
     PLUGIN_coin_SetBlackjackCounters(deposited, qualified);
     PLUGIN_coin_ClampTrackedAccounting();
@@ -433,8 +416,8 @@ PLUGIN_CODE(coin) u32 PLUGIN_coin_RecordBlackjackQualified(u32 qualifiedCoins)
     if (g_coinsFailed || !g_patchedHome || !qualifiedCoins)
         goto rejected;
 
-    u32 deposited = PLUGIN_coin_GetBlackjackDepositedCounter();
-    u32 qualified = PLUGIN_coin_GetBlackjackQualifiedCounter();
+    u32 deposited = PLUGIN_coin_GetBlackjackDeposited();
+    u32 qualified = PLUGIN_coin_GetBlackjackQualified();
     u32 remaining = deposited - qualified;
     u32 credited = qualifiedCoins < remaining ? qualifiedCoins : remaining;
     if (!credited)
@@ -467,7 +450,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_RecordBlackjackWithdrawal(
 
     bool accepted = false;
     u32 newSurplus = PLUGIN_coin_SaturatingAdd(
-        PLUGIN_coin_GetBlackjackSurplusCounter(),
+        PLUGIN_coin_GetBlackjackSurplus(),
         netSurplusCoins
     );
     u32 capacity = PLUGIN_coin_SaturatingAdd(coinsTrue, newSurplus);
@@ -666,11 +649,6 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistoryForDay(u32 currentDay)
 }
 
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistory(void)
-{
-    return PLUGIN_coin_UpdateDayHistoryForDay(PLUGIN_coin_CurrentCalendarDay());
-}
-
 PLUGIN_CODE(coin) static bool PLUGIN_coin_DayHistoryNeedsUpdate(u32 currentDay)
 {
     u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
@@ -849,9 +827,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_GenerateRandomBytes(void *out, u32 s
     if (R_FAILED(rc))
         return rc;
 
-    u8 *tls;
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tls));
-    u32 *cmdbuf = (u32*)(tls + 0x80);
+    u32 *cmdbuf = PLUGIN_coin_CommandBuffer();
 
     cmdbuf[0] = 0x000D0042;
     cmdbuf[1] = size;
@@ -969,23 +945,6 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_NextStepCost(u32 coinsToday)
     return coinsToday < 10u ? 100u : 100u + 3u * (coinsToday - 9u);
 }
 
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_TotalSpentSteps(u32 coinsToday)
-{
-    u32 total = 0;
-    u32 cost = 100;
-
-    for (u32 coin = 0; coin < coinsToday; coin++)
-    {
-        if (total > 0xFFFFFFFFu - cost)
-            return 0xFFFFFFFFu;
-
-        total += cost;
-        if (coin >= 9u && cost <= 0xFFFFFFFCu)
-            cost += 3u;
-    }
-
-    return total;
-}
 #elif defined(PLAYCOIN_HELPERS_MENU_ITEMS)
 PLUGIN_CODE(coin) static bool PLUGIN_coin_StringEquals(const char *a, const char *b)
 {

@@ -7,10 +7,10 @@ cd "$SCRIPT_DIR"
 # Independent installed-asset versions. Bump only the asset that changed.
 ICN_VERSION=1
 ACHV_VERSION=4
-EASYTOP_VERSION=2
-MEDIUMTOP_VERSION=2
-HARDTOP_VERSION=2
-EXTREMTOP_VERSION=2
+EASYTOP_VERSION=3
+MEDIUMTOP_VERSION=3
+HARDTOP_VERSION=3
+EXTREMTOP_VERSION=3
 
 ACHV_BUILDER="$SCRIPT_DIR/Playcoinz-achv-bin-builder.py"
 TOP_IMAGE_BUILDER="$SCRIPT_DIR/Playcoinz-top-image-pack-builder.py"

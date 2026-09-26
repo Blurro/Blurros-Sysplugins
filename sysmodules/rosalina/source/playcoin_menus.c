@@ -334,7 +334,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebugLiveRows(bool dayChanged)
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
 {
-    PLUGIN_coin_UpdateDayHistory();
+    PLUGIN_coin_UpdateDayHistoryForDay(PLUGIN_coin_CurrentCalendarDay());
 
     COIN_HOST__Draw_Lock();
     COIN_HOST__Draw_ClearFramebuffer();
@@ -370,7 +370,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
         {
             u32 historyProgress = d.historyTotal >= d.historyBoundary ?
                 d.historyTotal - d.historyBoundary : 0u;
-            u32 spentSteps = PLUGIN_coin_TotalSpentSteps(d.coinsToday);
+            u32 spentSteps = PLUGIN_coin_ProgressiveStepsSpent(d.coinsToday);
             u32 dayBaseline = d.historyBoundary >= spentSteps ?
                 d.historyBoundary - spentSteps : 0u;
             COIN_HOST__Draw_DrawFormattedString(20, 117, COLOR_WHITE, g_coinDayBaselineFmt, dayBaseline);
@@ -478,7 +478,9 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenDebug(void)
         if (redrawTicks >= 20u)
         {
             redrawTicks = 0;
-            bool dayChanged = PLUGIN_coin_UpdateDayHistory();
+            bool dayChanged = PLUGIN_coin_UpdateDayHistoryForDay(
+                PLUGIN_coin_CurrentCalendarDay()
+            );
             PLUGIN_coin_DrawDebugLiveRows(dayChanged);
         }
     } while (!COIN_HOST__menuShouldExit);
@@ -500,17 +502,30 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawSimpleMenuItem(
     COIN_HOST__Draw_DrawString(24, y, color, text);
 }
 
+PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawSimpleMenuSelection(
+    u32 oldY,
+    u32 newY,
+    const char *oldText,
+    const char *newText,
+    u32 oldColor,
+    u32 newColor
+)
+{
+    COIN_HOST__Draw_Lock();
+    COIN_HOST__Draw_DrawString(10, oldY, COLOR_BLACK, g_coinMenuClearRow);
+    COIN_HOST__Draw_DrawString(10, newY, COLOR_BLACK, g_coinMenuClearRow);
+    PLUGIN_coin_DrawSimpleMenuItem(oldY, false, oldText, oldColor);
+    PLUGIN_coin_DrawSimpleMenuItem(newY, true, newText, newColor);
+    COIN_HOST__Draw_FlushFramebuffer();
+    COIN_HOST__Draw_Unlock();
+}
+
 PLUGIN_CODE(coin) static bool PLUGIN_coin_HasEarnedAchievements(void)
 {
     u32 earnedMask = 0;
     return g_coinAchievementsEnabled &&
         R_SUCCEEDED(PLUGIN_coin_ReadAchievementEarnedMask(&earnedMask)) &&
         (earnedMask & COIN_ACHIEVEMENT_MASK) != 0;
-}
-
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_PlayCoinzMenuCount(bool showAchievements)
-{
-    return showAchievements ? 3u : 2u;
 }
 
 PLUGIN_CODE(coin) static const char *PLUGIN_coin_GetPlayCoinzMenuTitle(
@@ -537,7 +552,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawPlayCoinzMenu(
     bool showAchievements
 )
 {
-    u32 count = PLUGIN_coin_PlayCoinzMenuCount(showAchievements);
+    u32 count = showAchievements ? 3u : 2u;
 
     COIN_HOST__Draw_Lock();
     COIN_HOST__Draw_ClearFramebuffer();
@@ -578,13 +593,14 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawPlayCoinzSelection(
     u32 oldY = PLUGIN_coin_PlayCoinzMenuY(oldSelected);
     u32 newY = PLUGIN_coin_PlayCoinzMenuY(selected);
 
-    COIN_HOST__Draw_Lock();
-    COIN_HOST__Draw_DrawString(10, oldY, COLOR_BLACK, g_coinMenuClearRow);
-    COIN_HOST__Draw_DrawString(10, newY, COLOR_BLACK, g_coinMenuClearRow);
-    PLUGIN_coin_DrawSimpleMenuItem(oldY, false, oldTitle, COLOR_WHITE);
-    PLUGIN_coin_DrawSimpleMenuItem(newY, true, newTitle, COLOR_CYAN);
-    COIN_HOST__Draw_FlushFramebuffer();
-    COIN_HOST__Draw_Unlock();
+    PLUGIN_coin_RedrawSimpleMenuSelection(
+        oldY,
+        newY,
+        oldTitle,
+        newTitle,
+        COLOR_WHITE,
+        COLOR_CYAN
+    );
 }
 
 
@@ -607,50 +623,6 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_AchievementIndexForRow(u32 row)
             return i;
     }
     return COIN_ACHIEVEMENT_COUNT;
-}
-
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_AchievementTierForRow(u32 row)
-{
-    if (row <= 5u)
-        return 0u;
-    if (row >= 7u && row <= 12u)
-        return 1u;
-    if (row >= 14u && row <= 19u)
-        return 2u;
-    return 3u;
-}
-
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_AchievementTierMask(u32 tier)
-{
-    if (tier == 0u)
-        return 0x0000001Fu;
-    if (tier == 1u)
-        return 0x000003E0u;
-    if (tier == 2u)
-        return 0x00007C00u;
-    return 0x00038000u;
-}
-
-PLUGIN_CODE(coin) static const char *PLUGIN_coin_AchievementTierName(u32 tier)
-{
-    if (tier == 0u)
-        return g_coinTierEasy;
-    if (tier == 1u)
-        return g_coinTierMedium;
-    if (tier == 2u)
-        return g_coinTierHard;
-    return g_coinTierExtreme;
-}
-
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_AchievementTierColor(u32 tier)
-{
-    if (tier == 0u)
-        return COIN_ACHV_EASY_COLOR;
-    if (tier == 1u)
-        return COLOR_YELLOW;
-    if (tier == 2u)
-        return COIN_ACHV_HARD_COLOR;
-    return COLOR_RED;
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_LoadAchievementTitles(u32 earnedMask)
@@ -696,10 +668,10 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawAchievementRow(
 {
     if (row == 0u || row == 7u || row == 14u || row == 21u)
     {
-        u32 tier = PLUGIN_coin_AchievementTierForRow(row);
-        const char *title = (earnedMask & PLUGIN_coin_AchievementTierMask(tier)) ?
-            PLUGIN_coin_AchievementTierName(tier) : g_coinTierLocked;
-        COIN_HOST__Draw_DrawString(24, y, PLUGIN_coin_AchievementTierColor(tier), title);
+        u32 tier = row == 0u ? 0u : row == 7u ? 1u : row == 14u ? 2u : 3u;
+        const char *title = (earnedMask & g_coinAchievementTierMasks[tier]) ?
+            g_coinAchievementTierNames[tier] : g_coinTierLocked;
+        COIN_HOST__Draw_DrawString(24, y, g_coinAchievementTierColors[tier], title);
         return;
     }
 
@@ -812,7 +784,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawAchievementDetail(u32 achievementI
             achievement.menuMessage
         );
         if (achievement.difficulty <= 3u)
-            titleColor = PLUGIN_coin_AchievementTierColor(achievement.difficulty);
+            titleColor = g_coinAchievementTierColors[achievement.difficulty];
     }
 
     if (!g_coinAchievementDetailTitle[0])
@@ -866,13 +838,14 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawAchievementOptionSelection(
     const char *newText = selected == 0u ?
         g_coinAchievementResendItem : g_coinAchievementDeleteItem;
 
-    COIN_HOST__Draw_Lock();
-    COIN_HOST__Draw_DrawString(10, oldY, COLOR_BLACK, g_coinMenuClearRow);
-    COIN_HOST__Draw_DrawString(10, newY, COLOR_BLACK, g_coinMenuClearRow);
-    PLUGIN_coin_DrawSimpleMenuItem(oldY, false, oldText, COLOR_WHITE);
-    PLUGIN_coin_DrawSimpleMenuItem(newY, true, newText, COLOR_WHITE);
-    COIN_HOST__Draw_FlushFramebuffer();
-    COIN_HOST__Draw_Unlock();
+    PLUGIN_coin_RedrawSimpleMenuSelection(
+        oldY,
+        newY,
+        oldText,
+        newText,
+        COLOR_WHITE,
+        COLOR_WHITE
+    );
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_DrawConfirmItem(
@@ -892,7 +865,8 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawConfirmItem(
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_DrawAchievementConfirm(
     u32 selected,
-    const char *explain
+    const char *explain,
+    const char *warning
 )
 {
     u32 noY = explain ? 173u : 55u;
@@ -910,6 +884,8 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawAchievementConfirm(
             explain
         );
     }
+    if (warning)
+        COIN_HOST__Draw_DrawString(20, 117, COLOR_ORANGE, warning);
     PLUGIN_coin_DrawConfirmItem(noY, selected == 0u, g_coinConfirmNo);
     PLUGIN_coin_DrawConfirmItem(yesY, selected == 1u, g_coinConfirmYes);
     COIN_HOST__Draw_FlushFramebuffer();
@@ -939,11 +915,12 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawAchievementConfirmSelection(
 }
 
 PLUGIN_CODE(coin) static bool PLUGIN_coin_ConfirmAchievementAction(
-    const char *explain
+    const char *explain,
+    const char *warning
 )
 {
     u32 selected = 0;
-    PLUGIN_coin_DrawAchievementConfirm(selected, explain);
+    PLUGIN_coin_DrawAchievementConfirm(selected, explain, warning);
 
     do
     {
@@ -959,63 +936,6 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ConfirmAchievementAction(
                 selected,
                 explain != NULL
             );
-        }
-        else if (pressed & KEY_A)
-        {
-            return selected == 1u;
-        }
-    } while (!COIN_HOST__menuShouldExit);
-
-    return false;
-}
-
-PLUGIN_CODE(coin) static void PLUGIN_coin_DrawProgressiveCostConfirm(u32 selected)
-{
-    COIN_HOST__Draw_Lock();
-    COIN_HOST__Draw_ClearFramebuffer();
-    PLUGIN_coin_DrawFrame(g_coinConfirmTitle);
-    COIN_HOST__Draw_DrawString(20, 42, COLOR_WHITE, g_coinProgressiveCostExplain);
-    COIN_HOST__Draw_DrawString(20, 117, COLOR_ORANGE, g_coinProgressiveCostWarning);
-    PLUGIN_coin_DrawConfirmItem(173u, selected == 0u, g_coinConfirmNo);
-    PLUGIN_coin_DrawConfirmItem(188u, selected == 1u, g_coinConfirmYes);
-    COIN_HOST__Draw_FlushFramebuffer();
-    COIN_HOST__Draw_Unlock();
-}
-
-PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawProgressiveCostConfirmSelection(
-    u32 oldSelected,
-    u32 selected
-)
-{
-    u32 oldY = oldSelected == 0u ? 173u : 188u;
-    u32 newY = selected == 0u ? 173u : 188u;
-    const char *oldText = oldSelected == 0u ? g_coinConfirmNo : g_coinConfirmYes;
-    const char *newText = selected == 0u ? g_coinConfirmNo : g_coinConfirmYes;
-
-    COIN_HOST__Draw_Lock();
-    COIN_HOST__Draw_DrawString(10, oldY, COLOR_BLACK, g_coinMenuClearRow);
-    COIN_HOST__Draw_DrawString(10, newY, COLOR_BLACK, g_coinMenuClearRow);
-    PLUGIN_coin_DrawConfirmItem(oldY, false, oldText);
-    PLUGIN_coin_DrawConfirmItem(newY, true, newText);
-    COIN_HOST__Draw_FlushFramebuffer();
-    COIN_HOST__Draw_Unlock();
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_ConfirmProgressiveCostAction(void)
-{
-    u32 selected = 0;
-    PLUGIN_coin_DrawProgressiveCostConfirm(selected);
-
-    do
-    {
-        u32 pressed = COIN_HOST__waitInputWithTimeout(50);
-        if (pressed & KEY_B)
-            return false;
-        if (pressed & (KEY_DUP | KEY_DDOWN))
-        {
-            u32 oldSelected = selected;
-            selected = selected ? 0u : 1u;
-            PLUGIN_coin_RedrawProgressiveCostConfirmSelection(oldSelected, selected);
         }
         else if (pressed & KEY_A)
         {
@@ -1145,14 +1065,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenAchievementOptions(u32 achievement
         u32 pressed = COIN_HOST__waitInputWithTimeout(50);
         if (pressed & KEY_B)
             return;
-        if (pressed & KEY_DDOWN)
-        {
-            u32 oldSelected = selected;
-            selected = selected ? 0u : 1u;
-            if (selected != oldSelected)
-                PLUGIN_coin_RedrawAchievementOptionSelection(oldSelected, selected);
-        }
-        else if (pressed & KEY_DUP)
+        if (pressed & (KEY_DDOWN | KEY_DUP))
         {
             u32 oldSelected = selected;
             selected = selected ? 0u : 1u;
@@ -1162,7 +1075,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenAchievementOptions(u32 achievement
         else if (pressed & KEY_A)
         {
             bool resend = selected == 0u;
-            if (PLUGIN_coin_ConfirmAchievementAction(NULL))
+            if (PLUGIN_coin_ConfirmAchievementAction(NULL, NULL))
                 PLUGIN_coin_RunAchievementAction(achievementIndex, resend);
             PLUGIN_coin_DrawAchievementOptionMenu(selected);
         }
@@ -1212,29 +1125,21 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenAchievements(void)
         u32 pressed = COIN_HOST__waitInputWithTimeout(50);
         if (pressed & KEY_B)
             break;
-        if (pressed & KEY_DDOWN)
+        if (pressed & (KEY_DDOWN | KEY_DUP))
         {
             u32 oldSelected = selectedAchievement;
             u32 oldFirst = first;
-            selectedAchievement = selectedAchievement + 1u < COIN_ACHIEVEMENT_COUNT ?
-                selectedAchievement + 1u : 0u;
-            first = PLUGIN_coin_AdjustAchievementFirst(
-                first,
-                PLUGIN_coin_AchievementRowForIndex(selectedAchievement)
-            );
-            if (first != oldFirst)
-                PLUGIN_coin_DrawAchievements(first, selectedAchievement, earnedMask);
-            else if (selectedAchievement != oldSelected)
-                PLUGIN_coin_RedrawAchievementSelection(
-                    first, oldSelected, selectedAchievement, earnedMask
-                );
-        }
-        else if (pressed & KEY_DUP)
-        {
-            u32 oldSelected = selectedAchievement;
-            u32 oldFirst = first;
-            selectedAchievement = selectedAchievement ?
-                selectedAchievement - 1u : COIN_ACHIEVEMENT_COUNT - 1u;
+            if (pressed & KEY_DDOWN)
+            {
+                selectedAchievement =
+                    selectedAchievement + 1u < COIN_ACHIEVEMENT_COUNT ?
+                    selectedAchievement + 1u : 0u;
+            }
+            else
+            {
+                selectedAchievement = selectedAchievement ?
+                    selectedAchievement - 1u : COIN_ACHIEVEMENT_COUNT - 1u;
+            }
             first = PLUGIN_coin_AdjustAchievementFirst(
                 first,
                 PLUGIN_coin_AchievementRowForIndex(selectedAchievement)
@@ -1318,23 +1223,14 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawOptionsSelection(
     u32 oldY = PLUGIN_coin_OptionsY(oldSelected);
     u32 newY = PLUGIN_coin_OptionsY(selected);
 
-    COIN_HOST__Draw_Lock();
-    COIN_HOST__Draw_DrawString(10, oldY, COLOR_BLACK, g_coinMenuClearRow);
-    COIN_HOST__Draw_DrawString(10, newY, COLOR_BLACK, g_coinMenuClearRow);
-    PLUGIN_coin_DrawSimpleMenuItem(
+    PLUGIN_coin_RedrawSimpleMenuSelection(
         oldY,
-        false,
-        PLUGIN_coin_OptionTitle(oldSelected),
-        PLUGIN_coin_OptionColor(oldSelected)
-    );
-    PLUGIN_coin_DrawSimpleMenuItem(
         newY,
-        true,
+        PLUGIN_coin_OptionTitle(oldSelected),
         PLUGIN_coin_OptionTitle(selected),
+        PLUGIN_coin_OptionColor(oldSelected),
         PLUGIN_coin_OptionColor(selected)
     );
-    COIN_HOST__Draw_FlushFramebuffer();
-    COIN_HOST__Draw_Unlock();
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_RedrawOptionValues(
@@ -1380,16 +1276,13 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
         u32 pressed = COIN_HOST__waitInputWithTimeout(50);
         if (pressed & KEY_B)
             break;
-        if (pressed & KEY_DDOWN)
+        if (pressed & (KEY_DDOWN | KEY_DUP))
         {
             u32 oldSelected = selected;
-            selected = selected < 2u ? selected + 1u : 0u;
-            PLUGIN_coin_RedrawOptionsSelection(oldSelected, selected);
-        }
-        else if (pressed & KEY_DUP)
-        {
-            u32 oldSelected = selected;
-            selected = selected ? selected - 1u : 2u;
+            if (pressed & KEY_DDOWN)
+                selected = selected < 2u ? selected + 1u : 0u;
+            else
+                selected = selected ? selected - 1u : 2u;
             PLUGIN_coin_RedrawOptionsSelection(oldSelected, selected);
         }
         else if (pressed & KEY_A)
@@ -1399,7 +1292,8 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
                 if (g_coinAchievementsEnabled)
                 {
                     if (PLUGIN_coin_ConfirmAchievementAction(
-                            g_coinAchievementsDisableExplain
+                            g_coinAchievementsDisableExplain,
+                            NULL
                         ))
                         g_coinAchievementsEnabled = false;
                     PLUGIN_coin_DrawOptions(selected);
@@ -1422,7 +1316,10 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
             {
                 if (g_coinProgressiveCostEnabled)
                 {
-                    if (PLUGIN_coin_ConfirmProgressiveCostAction())
+                    if (PLUGIN_coin_ConfirmAchievementAction(
+                            g_coinProgressiveCostExplain,
+                            g_coinProgressiveCostWarning
+                        ))
                     {
                         if (PLUGIN_coin_SetProgressiveCostEnabled(false))
                             g_coinAchievementsEnabled = false;
@@ -1440,7 +1337,8 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenOptions(void)
             else
             {
                 if (PLUGIN_coin_ConfirmAchievementAction(
-                        g_coinCleanStaleNotificationsExplain
+                        g_coinCleanStaleNotificationsExplain,
+                        NULL
                     ))
                 {
                     Result rc = PLUGIN_coin_CleanStaleNotifications();
@@ -1474,23 +1372,15 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenPlayCoinzMenu(void)
         if (pressed & KEY_B)
             return;
 
-        u32 count = PLUGIN_coin_PlayCoinzMenuCount(showAchievements);
+        u32 count = showAchievements ? 3u : 2u;
 
-        if (pressed & KEY_DDOWN)
+        if (pressed & (KEY_DDOWN | KEY_DUP))
         {
             u32 oldSelected = selected;
-            selected = selected + 1u < count ? selected + 1u : 0u;
-            if (selected != oldSelected)
-                PLUGIN_coin_RedrawPlayCoinzSelection(
-                    oldSelected,
-                    selected,
-                    showAchievements
-                );
-        }
-        else if (pressed & KEY_DUP)
-        {
-            u32 oldSelected = selected;
-            selected = selected ? selected - 1u : count - 1u;
+            if (pressed & KEY_DDOWN)
+                selected = selected + 1u < count ? selected + 1u : 0u;
+            else
+                selected = selected ? selected - 1u : count - 1u;
             if (selected != oldSelected)
                 PLUGIN_coin_RedrawPlayCoinzSelection(
                     oldSelected,
@@ -1514,7 +1404,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenPlayCoinzMenu(void)
             }
 
             bool newShowAchievements = PLUGIN_coin_HasEarnedAchievements();
-            u32 newCount = PLUGIN_coin_PlayCoinzMenuCount(newShowAchievements);
+            u32 newCount = newShowAchievements ? 3u : 2u;
             if (selected >= newCount)
                 selected = newCount - 1u;
             showAchievements = newShowAchievements;
