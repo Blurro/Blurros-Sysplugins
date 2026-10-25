@@ -2,9 +2,10 @@
 .balign 4
 .arm
 
-@ --------------- home menu hooks ---------------
+@ home hooks; replayed bits below are from Nintendo HOME Menu
+@ the opcode checks live in Loader's playcoin_hooks.c
 
-@ -------- below must be mirrored exactly on rosalina side asm
+@ this handoff layout must match the rosalina copy
 .global PLUGIN_coin_dat
 PLUGIN_coin_dat:
     .hword 0
@@ -44,7 +45,7 @@ PLUGIN_coin_stepDiagnostics:
     .word 0 @ last history query time low
     .word 0 @ last history query time high
     .word 0 @ preserved Today stays the minimum +3 count
-@ -------- end of rosalina mirroring
+@ end of the shared handoff layout
 
 @ below is this side only
 .balign 4
@@ -77,7 +78,7 @@ PLUGIN_coin_rtcDayGateHook:
     mcr     p15, 0, r1, c7, c10, 5
     pop     {r0-r2}
 
-    @ redo HOME's 64-bit current day - saved day compare
+    @ Nintendo HOME replay: current day - saved day
     subs    r0, r7, r5
     sbcs    r0, r8, r6
     blt     rtcClockBehind
@@ -152,7 +153,7 @@ rtcForwardSuppress:
 
 rtcForwardReady:
     pop     {r1, r2}
-    @ redo the positive flags HOME's +0x34 branch expects
+    @ Nintendo HOME replay: flags for its next branch
     subs    r0, r7, r5
     sbcs    r0, r8, r6
     b       rtcRebaseCurrentDay
@@ -436,6 +437,7 @@ finishHomeCalculation:
     str     r7, [r8, #4]          @ consume RTC rebase marker once
     mcr     p15, 0, r7, c7, c10, 5 @ publish state before clearing inFlight
     str     r7, [r8]
+    @ Nintendo HOME replay: original coin-calc return
     add     sp, sp, #0x7c
     pop     {r4, r5, r6, r7, r8, sb, sl, fp, pc}
 
@@ -700,3 +702,18 @@ costReturn:
     add     r0, r0, #0x100
     add     r0, r0, #0x84
     mov     pc, r0
+
+@ original terms for the custom svc stubs in Loader's playcoin_hooks.c
+@   This paricular file is licensed under the following terms:
+
+@   This software is provided 'as-is', without any express or implied warranty. In no event will the authors be held liable
+@   for any damages arising from the use of this software.
+@
+@   Permission is granted to anyone to use this software for any purpose, including commercial applications, and to alter it
+@   and redistribute it freely, subject to the following restrictions:
+@
+@    The origin of this software must not be misrepresented; you must not claim that you wrote the original software.
+@    If you use this software in a product, an acknowledgment in the product documentation would be appreciated but is not required.
+@
+@    Altered source versions must be plainly marked as such, and must not be misrepresented as being the original software.
+@    This notice may not be removed or altered from any source distribution.

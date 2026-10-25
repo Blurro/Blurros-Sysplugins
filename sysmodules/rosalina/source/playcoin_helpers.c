@@ -873,10 +873,15 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_WriteFullState(
 
     u32 written = 0;
     u32 size = words * sizeof(u32);
+
+    // only truncate when replacing an oversized file; normal writes extend it
+    u64 oldSize = 0;
+    Result sizeRc = COIN_HOST__FSFILE_GetSize(file, &oldSize);
+
     Result rc = COIN_HOST__FSFILE_Write(file, &written, 0, state, size, FS_WRITE_FLUSH);
     if (R_SUCCEEDED(rc) && written != size)
         rc = (Result)-29;
-    if (R_SUCCEEDED(rc))
+    if (R_SUCCEEDED(rc) && (R_FAILED(sizeRc) || oldSize > size))
         rc = COIN_HOST__FSFILE_SetSize(file, size);
     return rc;
 }

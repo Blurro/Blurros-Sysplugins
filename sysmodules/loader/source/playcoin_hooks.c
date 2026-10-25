@@ -22,7 +22,8 @@ extern void *pluginTable_coin[];
 #define COIN_HOST__FSFILE_Close             ((Result(*)(Handle))pluginTable_coin[4])
 #define COIN_HOST__fsMakePath               ((FS_Path(*)(FS_PathType,const void*))pluginTable_coin[5])
 
-#define COIN_NEWSLIST_ICON_PACK_SIZE 0x4800u
+#define COIN_NEWSLIST_ICON_SIZE 0x1200u
+#define COIN_NEWSLIST_ICON_PACK_SIZE (4u * COIN_NEWSLIST_ICON_SIZE)
 #define COIN_ASSET_VERSION_MAGIC 0x56584E33u
 #define COIN_NEWSLIST_ICON_ALLOC_SIZE 0x5000u
 #define COIN_NEWSLIST_ICON_PAGES 5u
@@ -83,6 +84,7 @@ __asm__(
     "PLUGIN_coin_homeNewsCoinHighBaseWord:\n"
     ".word 0x00040030\n"
 
+    // replay bits are Nintendo HOME Menu code; MatchHomeNewsIconCall checks them
     ".global PLUGIN_coin_HomeNewsIconHook\n"
     ".type PLUGIN_coin_HomeNewsIconHook, %function\n"
     "PLUGIN_coin_HomeNewsIconHook:\n"
@@ -124,7 +126,7 @@ __asm__(
     "ldr r12, [r12]\n"
     "blx r12\n"
     "3:\n"
-    // we replaced the old BL + mov r0,#0x40 pair
+    // replay Nintendo HOME Menu's mov, then go back after its BL/MOV
     "mov r0, #0x40\n"
     "adr r12, PLUGIN_coin_homeNewsIconResumeWord\n"
     "ldr pc, [r12]\n"
@@ -137,6 +139,30 @@ __asm__(
     ".global PLUGIN_coin_homeNewsIconEnd\n"
     "PLUGIN_coin_homeNewsIconEnd:\n"
 );
+
+// runs from NewsList's kernel alias, so no Loader globals or host calls here
+PLUGIN_CODE(coin) static void PLUGIN_coin_CopyNewslistIcon(
+    const u32 *processId,
+    u32 *destination,
+    u32 capacity,
+    u32 *outSize,
+    const u32 *icons
+)
+{
+    if (processId[0] != 0x6E696F63u) // "coin"
+        return;
+
+    u32 difficulty = processId[1] - 0x00040030u;
+    if (difficulty >= 4u || !icons || capacity < COIN_NEWSLIST_ICON_SIZE)
+        return;
+
+    const u32 *icon = icons + difficulty * (COIN_NEWSLIST_ICON_SIZE / sizeof(u32));
+    for (u32 i = 0; i < COIN_NEWSLIST_ICON_SIZE / sizeof(u32); i++)
+        destination[i] = icon[i];
+
+    if (outSize)
+        *outSize = COIN_NEWSLIST_ICON_SIZE;
+}
 
 __asm__(
     ".section .plugin_coin,\"ax\",%progbits\n"
@@ -152,62 +178,44 @@ __asm__(
     "PLUGIN_coin_newslistIconResumeWord:\n"
     ".word 0\n"
 
+    // same for Nintendo NewsList; MatchNewslistIconCall checks that call site
     ".global PLUGIN_coin_NewslistIconHook\n"
     ".type PLUGIN_coin_NewslistIconHook, %function\n"
     "PLUGIN_coin_NewslistIconHook:\n"
-    // always run Nintendo's resolver first, then replace only Coin bitmaps
+    // keep Nintendo's stack args intact
     "push {r4-r9}\n"
-    "ldr r6, [sp, #24]\n"      // original max
-    "ldr r7, [sp, #28]\n"      // original outSize
-    "mov r4, r1\n"             // processID pointer
+    "ldr r6, [sp, #24]\n"      // capacity
+    "ldr r7, [sp, #28]\n"      // outSize
+    "mov r4, r1\n"             // processId
     "mov r5, r3\n"             // destination
-    // rebuild the resolver's two stack args
     "sub sp, sp, #8\n"
     "str r6, [sp]\n"
     "str r7, [sp, #4]\n"
     "adr r12, PLUGIN_coin_newslistIconOriginalWord\n"
     "ldr r12, [r12]\n"
     "blx r12\n"
+    "mrs r9, cpsr\n"           // keep Nintendo's flags for the return
+
+    // reuse this slot for C's fifth arg, keeping sp aligned
+    "mov r0, r4\n"
+    "mov r1, r5\n"
+    "mov r2, r6\n"
+    "mov r3, r7\n"
+    "adr r12, PLUGIN_coin_newslistIconBaseWord\n"
+    "ldr r12, [r12]\n"
+    "str r12, [sp]\n"
+    // relative call keeps this on the kernel alias
+    "bl PLUGIN_coin_CopyNewslistIcon\n"
+
     "add sp, sp, #8\n"
-    // keep the old BL+MOV flags
-    "mrs r9, cpsr\n"
-    // only this post-resolver copy is Coin-specific
-    "ldr r12, [r4]\n"
-    "ldr lr, =0x6E696F63\n"
-    "cmp r12, lr\n"
-    "bne 2f\n"
-    "ldr r12, [r4, #4]\n"
-    "ldr lr, =0x00040030\n"
-    "subs r12, r12, lr\n"
-    "cmp r12, #3\n"
-    "bhi 2f\n"
-    "adr lr, PLUGIN_coin_newslistIconBaseWord\n"
-    "ldr lr, [lr]\n"
-    "cmp lr, #0\n"
-    "beq 2f\n"
-    "mov r8, #0x1200\n"
-    "cmp r6, r8\n"
-    "blo 2f\n"
-    // iconBase + difficulty * 0x1200
-    "add r1, lr, r12, lsl #12\n"
-    "add r1, r1, r12, lsl #9\n"
-    "mov r2, r8\n"
-    "mov r3, r5\n"
-    "1:\n"
-    "ldr lr, [r1], #4\n"
-    "str lr, [r3], #4\n"
-    "subs r2, r2, #4\n"
-    "bne 1b\n"
-    "cmp r7, #0\n"
-    "strne r8, [r7]\n"
-    "2:\n"
     "msr cpsr_f, r9\n"
     "pop {r4-r9}\n"
-    // the old mov r0,#0x40 became our literal slot
+    // replay Nintendo NewsList's mov, then go back after its BL/MOV
     "mov r0, #0x40\n"
     "adr r12, PLUGIN_coin_newslistIconResumeWord\n"
     "ldr pc, [r12]\n"
 
+    // QueryMemory / SendSyncRequest stubs from devkitPro/libctru, libctru/source/svc.s
     ".global PLUGIN_coin_svcQueryMemory\n"
     ".type PLUGIN_coin_svcQueryMemory, %function\n"
     "PLUGIN_coin_svcQueryMemory:\n"
@@ -224,6 +232,7 @@ __asm__(
     "pop {r4, r5, r6}\n"
     "bx lr\n"
 
+    // custom svc stubs from Nexus3DS/Luma3DS, rosalina/source/csvc.s
     ".global PLUGIN_coin_svcConvertVAToPA\n"
     ".type PLUGIN_coin_svcConvertVAToPA, %function\n"
     "PLUGIN_coin_svcConvertVAToPA:\n"
@@ -1084,4 +1093,3 @@ PLUGIN_CODE(coin) void PLUGIN_coin_NewsListProcessCreated(
         );
     }
 }
-
