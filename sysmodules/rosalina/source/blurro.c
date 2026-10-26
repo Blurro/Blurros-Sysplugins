@@ -163,7 +163,7 @@ PLUGIN_RODATA(blur) static const char service_cdc[] = "cdc:CHK";
 
 PLUGIN_RODATA(blur) const char g_blurFeatureTitle[] = "Blurro Features Menu";
 PLUGIN_RODATA(blur) const char g_blurOnlineV1Title[] = "Blurro\'s Sysplugins";
-PLUGIN_RODATA(blur) const char g_blurOnlineV1Url[] = "https://blurro.github.io/sysplugins/online_v1/onlinetemporary.3on";
+PLUGIN_RODATA(blur) const char g_blurOnlineV1Url[] = "https://blurro.github.io/sysplugins/online_v1/onlinepagetemp.3on";
 PLUGIN_RODATA(blur) static const char g_blurToggleMenuTextOn[] = "Toggle Menu Text: ON";
 PLUGIN_RODATA(blur) static const char g_blurToggleMenuTextOff[] = "Toggle Menu Text: OFF";
 PLUGIN_RODATA(blur) static const char g_blurSelected[] = ">";

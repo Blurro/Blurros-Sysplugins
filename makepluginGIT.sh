@@ -77,7 +77,7 @@ LOADER_PLUGIN_CONFIG=(
 # Files are concatenated in listed order with no gaps, then the combined metadata is padded to 16 bytes.
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
-    "blur_r|version103.bin"
+    "blur_r|version104.bin"
     "coin_r|version109.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "powr_r|version101.bin"
     "hello_r|version101.bin"

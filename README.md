@@ -9,7 +9,7 @@ These use Nexus3DS's `.3nx` system to add new features without needing them buil
 Go and grab the latest **[Sysplugin Menu release](https://github.com/Blurro/MENU-Sysplugin-3DS/releases)** and make sure to put `sysplgfetch.txt` configured with:
 ```
 Blurro's Sysplugins
-https://blurro.github.io/sysplugins/online_v1/onlinetemporary.3on
+https://blurro.github.io/sysplugins/online_v1/onlinepagetemp.3on
 ```
 
 Onto your SD card in the `/luma/plugins/` folder!
