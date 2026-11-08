@@ -36,7 +36,6 @@
 #include "luma_config.h"
 #include "menus/n3ds.h"
 #include "menus/cheats.h"
-#include "menus/config_extra.h"
 #include "menus/home_button_sim.h"
 #include "menus/screen_toggle.h"
 #include "redshift/redshift.h"
@@ -48,9 +47,6 @@
 #include "shell.h"
 #include "volume.h"
 #include "pmdbgext.h"
-
-// Temperature conversion macros
-#define CELSIUS_TO_FAHRENHEIT(c) ((c) * 9 / 5 + 32)
 
 //#define ROSALINA_MENU_SELF_SCREENSHOT 1 // uncomment this to enable the feature
 
@@ -209,6 +205,7 @@ u32 waitCombo(void)
 
 static MyThread menuThread;
 static u8 CTR_ALIGN(8) menuThreadStack[0x3000];
+static bool menuCloseRequested = false;
 
 static float batteryPercentage;
 static float batteryVoltage;
@@ -486,6 +483,7 @@ void menuEnter(void)
     Draw_Lock();
     if(!menuShouldExit && menuRefCount == 0)
     {
+        menuCloseRequested = false;
         menuRefCount++;
         svcKernelSetState(0x10000, 2 | 1);
         svcSleepThread(5 * 1000 * 100LL);
@@ -514,6 +512,11 @@ void menuLeave(void)
         svcKernelSetState(0x10000, 2 | 1);
     }
     Draw_Unlock();
+}
+
+void menuRequestClose(void)
+{
+    menuCloseRequested = true;
 }
 
 
@@ -646,22 +649,19 @@ static void menuDraw(Menu *menu, u32 selected)
         u32 percentageInt = (u32)batteryPercentage;
         u32 percentageFrac = (u32)(batteryPercentage * 10.0f) % 10u;
 
+        // Temperature is an integer amount of degrees Celsius. 9C/5 has a fractional part in {0, 0.2, ..., 0.8},
+        // so adding 2/5 before truncating rounds to nearest (no ties)
+        bool fahrenheit = (lumaMcuConfig.flags & MCUCFG_FLAG_TEMPERATURE_IN_FAHRENHEIT) != 0;
+        int temperature = fahrenheit ? (9 * batteryTemperature + 2) / 5 + 32 : batteryTemperature;
+
+        // Temperature is padded to 3 chars in both units (F >= 32, so at least 2 digits) so that the string length
+        // doesn't change when the unit is toggled or when going above 99F
         char buf[32];
-        int n;
-        if (configExtra.temperatureUnit) {
-            u8 tempFahrenheit = CELSIUS_TO_FAHRENHEIT(batteryTemperature);
-            n = sprintf(
-                buf, "   %02hhu\xF8""F  %lu.%02luV  %lu.%lu%%", tempFahrenheit, // CP437
-                voltageInt, voltageFrac,
-                percentageInt, percentageFrac
-            );
-        } else {
-            n = sprintf(
-                buf, "   %02hhu\xF8""C  %lu.%02luV  %lu.%lu%%", batteryTemperature, // CP437
-                voltageInt, voltageFrac,
-                percentageInt, percentageFrac
-            );
-        }
+        int n = sprintf(
+            buf, fahrenheit ? "  %3d\xF8""F  %lu.%02luV  %lu.%lu%%" : "   %02d\xF8""C  %lu.%02luV  %lu.%lu%%", temperature, // CP437
+            voltageInt, voltageFrac,
+            percentageInt, percentageFrac
+        );
         Draw_DrawString(SCREEN_BOT_WIDTH - 10 - SPACING_X * n, SCREEN_BOT_HEIGHT - 30, COLOR_CYAN, buf);
     }
 
@@ -673,7 +673,7 @@ static void menuDraw(Menu *menu, u32 selected)
         Draw_DrawFormattedString(10, SCREEN_BOT_HEIGHT - 20, COLOR_ORANGE, "Based on Luma3DS %s-%08lx", versionString, commitHash);
     }
 
-    if (configExtra.use12HourClock) {
+    if ((lumaMcuConfig.flags & MCUCFG_FLAG_CLOCK_AM_PM) != 0) {
         const char *ampm = (hours >= 12) ? "PM" : "AM";
         u32 displayHours = (hours % 12 == 0) ? 12 : (hours % 12);
         Draw_DrawFormattedString(SCREEN_BOT_WIDTH - 30 - SPACING_X * 18.6, SCREEN_BOT_HEIGHT - 20, COLOR_CYAN, "%04lu-%02lu-%02lu", year, month, days);
@@ -698,6 +698,8 @@ void menuShow(Menu *root)
     if (menuItemIsHidden(&currentMenu->items[selectedItem]))
         selectedItem = menuAdvanceCursor(selectedItem, numItems, 1);
 
+    menuCloseRequested = false;
+
     Draw_Lock();
     Draw_ClearFramebuffer();
     Draw_FlushFramebuffer();
@@ -707,47 +709,10 @@ void menuShow(Menu *root)
 
     bool menuComboReleased = false;
 
-    u8 prevVolumeSlider[2] = {0};
-    s8 prevVolumeOverride = currVolumeSliderOverride;
-    bool firstRun = true;
-    u32 updateCounter = 0;
-
     do
     {
         u32 pressed = waitInputWithTimeout(30);
         numItems = menuCountItems(currentMenu);
-        updateCounter++;
-
-        if (firstRun || currVolumeSliderOverride != prevVolumeOverride)
-        {
-            prevVolumeOverride = currVolumeSliderOverride;
-            firstRun = false;
-        }
-        else if (pressed == 0)
-        {
-            if (isServiceUsable("mcu::HWC"))
-            {
-                u8 currentVolumeSlider[2];
-                
-                Handle *mcuHwcHandlePtr = mcuHwcGetSessionHandle();
-                Handle oldHandle = *mcuHwcHandlePtr;
-                *mcuHwcHandlePtr = 0;
-                
-                if (R_SUCCEEDED(srvGetServiceHandle(mcuHwcHandlePtr, "mcu::HWC")) ||
-                    R_SUCCEEDED(svcControlService(SERVICEOP_STEAL_CLIENT_SESSION, mcuHwcHandlePtr, "mcu::HWC")))
-                {
-                    if (R_SUCCEEDED(MCUHWC_ReadRegister(0x09, currentVolumeSlider + 1, 1)))
-                    {
-                        if (currentVolumeSlider[1] != prevVolumeSlider[1])
-                        {
-                            prevVolumeSlider[1] = currentVolumeSlider[1];
-                        }
-                    }
-                    svcCloseHandle(*mcuHwcHandlePtr);
-                }
-                *mcuHwcHandlePtr = oldHandle;
-            }
-        }
 
         if(!menuComboReleased && (scanHeldKeys() & menuCombo) != menuCombo)
         {
@@ -780,6 +745,9 @@ void menuShow(Menu *root)
                     __builtin_trap(); // oops
                     break;
             }
+
+            if (menuCloseRequested)
+                break;
 
             Draw_Lock();
             Draw_ClearFramebuffer();
@@ -835,5 +803,5 @@ void menuShow(Menu *root)
         menuDraw(currentMenu, selectedItem);
         Draw_Unlock();
     }
-    while(!menuShouldExit);
+    while(!menuShouldExit && !menuCloseRequested);
 }

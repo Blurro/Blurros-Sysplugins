@@ -53,7 +53,7 @@ NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_MENU_MapPage);
 NEXUS_PLUGIN_EXTERNAL_FUNC(PLUGIN_MENU_UnmapPage);
 
 PLUGIN_DATA(blur) void* pluginTable_blur[] = {
-    (void*)isServiceUsable,
+    (void*)srvIsServiceRegistered,
     (void*)svcSleepThread,
     (void*)svcGetSystemTick,
     (void*)&preTerminationRequested,
@@ -88,7 +88,7 @@ PLUGIN_DATA(blur) void* pluginTable_blur[] = {
     (void*)PLUGIN_MENU_LoadData,
     (void*)PLUGIN_MENU_AddOnlineEntry
 };
-#define BLUR_HOST__isServiceUsable                  ((bool(*)(const char*))pluginTable_blur[0])
+#define BLUR_HOST__srvIsServiceRegistered          ((Result(*)(bool*,const char*))pluginTable_blur[0])
 #define BLUR_HOST__svcSleepThread                   ((void(*)(s64))pluginTable_blur[1])
 #define BLUR_HOST__svcGetSystemTick                 ((u64(*)(void))pluginTable_blur[2])
 #define BLUR_HOST__preTerminationRequested          (*(bool*)pluginTable_blur[3])
@@ -752,6 +752,13 @@ PLUGIN_CODE(blur) void PLUGIN_blur_SetMenuFreezeInternal(bool freeze)
     PLUGIN_blur_WakeTickWorker();
 }
 
+// 0.5.0 inlines the old helper, so query the public service registry instead
+PLUGIN_CODE(blur) static bool PLUGIN_blur_IsServiceUsable(const char *service)
+{
+    bool registered = false;
+    return R_SUCCEEDED(BLUR_HOST__srvIsServiceRegistered(&registered, service)) && registered;
+}
+
 PLUGIN_CODE(blur) void PLUGIN_blur_CoolThreadMain(void)
 {
     Handle wakeEvent;
@@ -764,11 +771,11 @@ PLUGIN_CODE(blur) void PLUGIN_blur_CoolThreadMain(void)
         goto cleanup;
 
     while (!BLUR_HOST__preTerminationRequested &&
-        (!BLUR_HOST__isServiceUsable(service_acu) ||
-            !BLUR_HOST__isServiceUsable(service_hid) ||
-            !BLUR_HOST__isServiceUsable(service_gpu) ||
-            !BLUR_HOST__isServiceUsable(service_lcd) ||
-            !BLUR_HOST__isServiceUsable(service_cdc)))
+        (!PLUGIN_blur_IsServiceUsable(service_acu) ||
+            !PLUGIN_blur_IsServiceUsable(service_hid) ||
+            !PLUGIN_blur_IsServiceUsable(service_gpu) ||
+            !PLUGIN_blur_IsServiceUsable(service_lcd) ||
+            !PLUGIN_blur_IsServiceUsable(service_cdc)))
     {
         BLUR_HOST__svcSleepThread(250 * 1000 * 1000LL);
     }
