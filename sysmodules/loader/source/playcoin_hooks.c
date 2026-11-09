@@ -668,6 +668,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
         coinCalc[0x2Cu / 4u] != 0xE58D5028u ||
         coinCalc[0x30u / 4u] != 0xE58D6024u ||
         coinCalc[0x34u / 4u] != 0xBA00000Cu ||
+        coinCalc[0x164u / 4u] != 0xE6FF0070u ||
         coinCalc[0x168u / 4u] != 0xE05EA000u ||
         coinCalc[0x16Cu / 4u] != 0xE3A03000u)
     {
@@ -756,13 +757,17 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
         0xEA000001u,
         PLUGIN_coin_Phys(&PLUGIN_coin_handoffControl),
         NOP,
-        0x1A00001Au,
+        0xEA00001Au,
     };
 
     PLUGIN_coin_PatchWords(code, coinCalcOffset + 0x38u, pointerBlock, 13);
 
-    u32 historyDiagPatch[2] = {0xE51FF004u, PLUGIN_coin_Phys(PLUGIN_coin_historyDiagHook)};
-    PLUGIN_coin_PatchWords(code, coinCalcOffset + 0x168u, historyDiagPatch, 2);
+    u32 historyDiagPatch[3] = {
+        NOP, // keep the full saved boundary, even past 65k steps
+        0xE51FF004u,
+        PLUGIN_coin_Phys(PLUGIN_coin_historyDiagHook),
+    };
+    PLUGIN_coin_PatchWords(code, coinCalcOffset + 0x164u, historyDiagPatch, 3);
 
     u32 costPlus3Patch[2] = {0xE51FF004u, PLUGIN_coin_Phys(PLUGIN_coin_costPlus3Hook)};
     PLUGIN_coin_PatchWords(code, coinCalcOffset + 0x188u, costPlus3Patch, 2);
