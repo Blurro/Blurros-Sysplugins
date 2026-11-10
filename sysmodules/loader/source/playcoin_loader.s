@@ -58,111 +58,6 @@ PLUGIN_coin_handoffControl:
     .word 0                      @ YYYY | MM << 16 | DD << 24 for this decision
     .word 0                      @ calendar stamp being checked now
     .word 0                      @ previous HOME coins today
-    .word 0                      @ private accounting ready
-    .word 0                      @ coins today
-    .word 0                      @ live step boundary
-    .word 0                      @ history boundary
-    .word 0                      @ year | month << 16 | day << 24
-    .word 0                      @ save generation
-
-@ Both 20-byte HOME record helpers are intercepted at their ENTRY points:
-@ every caller of either helper goes through the matching hook.
-.global PLUGIN_coin_accountingLoadTarget
-PLUGIN_coin_accountingLoadTarget: .word 0   @ original shared load helper + 8
-.global PLUGIN_coin_accountingSaveTarget
-PLUGIN_coin_accountingSaveTarget: .word 0   @ original shared save helper + 8
-
-@ Replay the original load-helper prologue and resume at the third word.
-@ Loader verifies both words before patching.
-PLUGIN_coin_accountingLoadOriginal:
-    push    {r3-r9, lr}
-.global PLUGIN_coin_accountingLoadPrologue2
-PLUGIN_coin_accountingLoadPrologue2:
-    .word 0
-    ldr     pc, PLUGIN_coin_accountingLoadTarget
-
-.global PLUGIN_coin_accountingLoadHook
-PLUGIN_coin_accountingLoadHook:
-    push    {r4-r8, lr}
-    mov     r4, r1
-    adr     r6, PLUGIN_coin_handoffControl
-    ldr     r8, [r6]            @ keep an outer load busy through nested saves
-    mov     r7, #1
-    str     r7, [r6]
-    mcr     p15, 0, r7, c7, c10, 5
-    bl      PLUGIN_coin_accountingLoadOriginal
-    mov     r5, r0
-    ldr     r6, [r4]
-    mov     r7, #0x4f00
-    cmp     r6, r7
-    bne     accountingLoadDone
-    adr     r6, PLUGIN_coin_handoffControl
-    ldr     r7, [r6, #28]
-    cmp     r7, #1
-    bne     accountingLoadDone
-    ldr     r7, [r6, #32]
-    strh    r7, [r4, #6]
-    ldr     r7, [r6, #36]
-    str     r7, [r4, #8]
-    ldr     r7, [r6, #40]
-    str     r7, [r4, #12]
-    ldr     r7, [r6, #44]
-    str     r7, [r4, #16]
-accountingLoadDone:
-    @ HOME may skip the calculation/save. Restore only our own busy state.
-    adr     r6, PLUGIN_coin_handoffControl
-    str     r8, [r6]
-    mcr     p15, 0, r8, c7, c10, 5
-    mov     r0, r5
-    pop     {r4-r8, pc}        @ return directly to whichever caller loaded
-
-@ Replay the two verified helper-prologue words before entering +8.
-@ The normal helper epilogue returns through our BL to the hook.
-PLUGIN_coin_accountingSaveOriginal:
-    push    {r4-r7, lr}
-    sub     sp, sp, #0xc
-    ldr     pc, PLUGIN_coin_accountingSaveTarget
-
-.global PLUGIN_coin_accountingSaveHook
-PLUGIN_coin_accountingSaveHook:
-    push    {r4-r8, lr}
-    mov     r4, r1
-    adr     r5, PLUGIN_coin_handoffControl
-    ldr     r7, [r5]            @ a default save can run inside a load
-    mov     r6, #1
-    str     r6, [r5]
-    mcr     p15, 0, r6, c7, c10, 5
-    bl      PLUGIN_coin_accountingSaveOriginal
-    mov     r8, r0              @ preserve the helper's return value
-    @ A load can create a default record. Keep the earlier private snapshot.
-    cmp     r7, #0
-    bne     accountingSaveDone
-    @ Only a valid gamecoin record can become the new protected snapshot.
-    ldr     r5, [r4]
-    mov     r6, #0x4f00
-    cmp     r5, r6
-    bne     accountingSaveDone
-    adr     r5, PLUGIN_coin_handoffControl
-    ldrh    r6, [r4, #6]
-    str     r6, [r5, #32]
-    ldr     r6, [r4, #8]
-    str     r6, [r5, #36]
-    ldr     r6, [r4, #12]
-    str     r6, [r5, #40]
-    ldr     r6, [r4, #16]
-    str     r6, [r5, #44]
-    mov     r6, #1
-    str     r6, [r5, #28]
-    ldr     r6, [r5, #48]
-    add     r6, r6, #1
-    str     r6, [r5, #48]
-    mcr     p15, 0, r6, c7, c10, 5
-accountingSaveDone:
-    adr     r5, PLUGIN_coin_handoffControl
-    str     r7, [r5]
-    mcr     p15, 0, r7, c7, c10, 5
-    mov     r0, r8
-    pop     {r4-r8, pc}        @ original caller owns its post-save instructions
 
 .global PLUGIN_coin_rtcDayGateHook
 .type   PLUGIN_coin_rtcDayGateHook, %function
@@ -420,23 +315,19 @@ afterRtcBoundaryRebase:
     strlo   r7, [r8, #28]
 afterPreservedTodayFloor:
 
-    @ backwards RTC skips the pre hook; its record balance is still live
+    @ no current pre-hook means no persistent accounting
     tst     r10, #1
-    bne     currentPreBalanceReady
-    cmp     r0, #0
     beq     finishHomeCalculation
-    mov     r5, r6
-    mov     r12, #0
-    b       normalPersistentAccounting
 
-currentPreBalanceReady:
     ldrh    r5, [r8, #4]          @ current invocation pre-calc coins
 
-    @ RTC rebase can't pay steps, but a lower game balance still spent coins
+    @ recovery can rebuild HOME's display but cant change saved coin state
     cmp     r0, #0
     beq     normalPersistentAccounting
-    mov     r6, r5
-    mov     r12, #0
+    ldr     r7, [r9]
+    strh    r5, [r7]
+    strh    r5, [r4, #4]
+    b       finishHomeCalculation
 
 normalPersistentAccounting:
     cmp     r6, r5

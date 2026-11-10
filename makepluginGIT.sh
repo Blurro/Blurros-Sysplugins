@@ -78,10 +78,10 @@ LOADER_PLUGIN_CONFIG=(
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
     "blur_r|version105.bin"
-    "coin_r|version110.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "coin_r|version109.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "powr_r|version101.bin"
     "hello_r|version101.bin"
-    "coin_l|version110.bin"
+    "coin_l|version109.bin"
     "cfgn_l|version101.bin"
 )
 

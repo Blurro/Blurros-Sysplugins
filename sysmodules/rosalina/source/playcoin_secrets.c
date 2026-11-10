@@ -554,9 +554,11 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_RecordAchievementEarned(u32 achievem
 
     if (fileSize < COIN_FILE_NO_ACHIEVEMENT_SIZE)
     {
-        // The regular saver owns the fixed accounting block at 0x40.
-        rc = (Result)-28;
-        goto cleanup_file;
+        PLUGIN_coin_ResetExtendedData();
+        rc = PLUGIN_coin_WriteExtendedData(file, key);
+        if (R_FAILED(rc))
+            goto cleanup_file;
+        fileSize = COIN_FILE_NO_ACHIEVEMENT_SIZE;
     }
 
     u32 earnedMask = 0;

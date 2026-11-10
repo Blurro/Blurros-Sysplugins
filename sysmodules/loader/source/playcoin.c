@@ -15,14 +15,10 @@
 #define COIN_FILE_BASE_SIZE              0x20u
 #define COIN_FILE_EXTENSION_OFFSET       0x20u
 #define COIN_FILE_EXTENSION_WORDS        7u
-#define COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE 0x40u
-#define COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE 0x48u
-#define COIN_FILE_ACCOUNTING_OFFSET      0x40u
-#define COIN_FILE_ACHIEVEMENT_OFFSET     0x50u
-#define COIN_FILE_NO_ACHIEVEMENT_SIZE    0x50u
-#define COIN_FILE_WITH_ACHIEVEMENT_SIZE  0x58u
+#define COIN_FILE_ACHIEVEMENT_OFFSET     0x40u
+#define COIN_FILE_NO_ACHIEVEMENT_SIZE    0x40u
+#define COIN_FILE_WITH_ACHIEVEMENT_SIZE  0x48u
 #define COIN_FILE_EXTENSION_SEED         0x31445843u
-#define COIN_FILE_HOME_ACCOUNTING_SEED   0x314D4F48u
 #define COIN_EXT_BLACKJACK_COUNTERS_WORD 0u
 #define COIN_EXT_BLACKJACK_SURPLUS_WORD  1u
 #define COIN_EXT_TODAY_WORD              6u
@@ -185,154 +181,6 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_DecryptExtendedData(
         PLUGIN_coin_ExtendedDataChecksum(data, key);
 }
 
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_BlockChecksum(const u32 *data, u32 key)
-{
-    u32 sum = key ^ COIN_FILE_HOME_ACCOUNTING_SEED;
-    for (u32 i = 0; i < 3u; i++)
-        sum = PLUGIN_coin_Checksum(data[i] ^ i, sum ^ key);
-    return sum;
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_CalendarDate(u32 year, u32 month, u32 day)
-{
-    if (year < 2000u || year > 2127u || month < 1u || month > 12u || day < 1u)
-        return false;
-    u32 last = month == 2u ? 28u :
-        (month == 4u || month == 6u || month == 9u || month == 11u ? 30u : 31u);
-    if (month == 2u && !(year & 3u) && year != 2100u)
-        last++;
-    return day <= last;
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_AccountingDate(u32 date)
-{
-    if (!date)
-        return true; // HOME's unset date stays unset
-    return PLUGIN_coin_CalendarDate(date & 0xFFFFu, (date >> 16) & 0xFFu, date >> 24);
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_DecodeAccounting(
-    const u32 *stored, u32 key, u32 *accounting)
-{
-    u32 data[3];
-    u32 stream = key ^ COIN_FILE_HOME_ACCOUNTING_SEED;
-    for (u32 i = 0; i < 3u; i++)
-    {
-        stream = PLUGIN_coin_Checksum(stream ^ i, key);
-        data[i] = stored[i] ^ stream;
-    }
-    u32 packed = data[0] >> 16;
-    u32 date = packed ? (2000u + (packed >> 9)) |
-        (((packed >> 5) & 15u) << 16) | ((packed & 31u) << 24) : 0;
-    if (stored[3] != PLUGIN_coin_BlockChecksum(data, key) ||
-        !PLUGIN_coin_AccountingDate(date))
-        return false;
-    accounting[0] = 1;
-    accounting[1] = data[0] & 0xFFFFu;
-    accounting[2] = data[1];
-    accounting[3] = data[2];
-    accounting[4] = date;
-    return true;
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_ImportAccounting(u32 *accounting)
-{
-    FS_Archive archive;
-    FS_Path archivePath;
-    archivePath.type = PATH_BINARY;
-    archivePath.size = sizeof(g_gameCoinArchivePath);
-    archivePath.data = g_gameCoinArchivePath;
-    if (R_FAILED(COIN_HOST__FSUSER_OpenArchive(&archive, ARCHIVE_SHARED_EXTDATA, archivePath)))
-        return false;
-    Handle file = 0;
-    bool good = false;
-    if (R_SUCCEEDED(COIN_HOST__FSUSER_OpenFile(&file, archive,
-            COIN_HOST__fsMakePath(PATH_ASCII, g_gameCoinPath), FS_OPEN_READ, 0)))
-    {
-        u32 record[5];
-        u32 read = 0;
-        if (R_SUCCEEDED(COIN_HOST__FSFILE_Read(file, &read, 0, record, sizeof(record))) &&
-            read == sizeof(record) && record[0] == 0x4F00u &&
-            (record[1] & 0xFFFFu) <= 300u &&
-            PLUGIN_coin_AccountingDate(record[4]))
-        {
-            accounting[0] = 1;
-            accounting[1] = record[1] >> 16;
-            accounting[2] = record[2];
-            accounting[3] = record[3];
-            accounting[4] = record[4];
-            good = true;
-        }
-        COIN_HOST__FSFILE_Close(file);
-    }
-    COIN_HOST__FSUSER_CloseArchive(archive);
-    return good;
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_MigrateAccounting(
-    Handle file, u64 fileSize, u32 key, u32 *accounting)
-{
-    u32 oldAchievement[2];
-    bool oldMask = fileSize == COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE;
-    u32 read = 0;
-    if (oldMask)
-    {
-        if (R_FAILED(COIN_HOST__FSFILE_Read(file, &read,
-                COIN_FILE_ACCOUNTING_OFFSET, oldAchievement,
-                sizeof(oldAchievement))) || read != sizeof(oldAchievement))
-            return false;
-        u32 mask = 0;
-        // An invalid optional mask must not poison otherwise valid accounting.
-        if (!PLUGIN_coin_Decrypt(oldAchievement[0], oldAchievement[1],
-                key, &mask) || (mask & ~COIN_ACHIEVEMENT_MASK))
-            oldMask = false;
-    }
-    if (!PLUGIN_coin_ImportAccounting(accounting))
-        return false;
-    if (fileSize == COIN_FILE_BASE_SIZE)
-    {
-        // Old base-only saves get the usual empty walking extension.
-        u32 empty[COIN_FILE_EXTENSION_WORDS] = {0};
-        u32 storedExtension[COIN_FILE_EXTENSION_WORDS + 1u];
-        u32 stream = key ^ COIN_FILE_EXTENSION_SEED;
-        for (u32 i = 0; i < COIN_FILE_EXTENSION_WORDS; i++)
-        {
-            stream = PLUGIN_coin_Checksum(stream ^ i, key);
-            storedExtension[i] = stream;
-        }
-        storedExtension[COIN_FILE_EXTENSION_WORDS] =
-            PLUGIN_coin_ExtendedDataChecksum(empty, key);
-        u32 written = 0;
-        if (R_FAILED(PLUGIN_coin_FSFILE_Write(file, &written,
-                COIN_FILE_EXTENSION_OFFSET, storedExtension,
-                sizeof(storedExtension), 1u)) ||
-            written != sizeof(storedExtension))
-            return false;
-    }
-    u32 packed = 0;
-    if (accounting[4])
-        packed = ((accounting[4] & 0xFFFFu) - 2000u) << 9 |
-            (((accounting[4] >> 16) & 0xFFu) << 5) | (accounting[4] >> 24);
-    u32 data[3] = {accounting[1] | (packed << 16), accounting[2], accounting[3]};
-    u32 stored[4];
-    u32 stream = key ^ COIN_FILE_HOME_ACCOUNTING_SEED;
-    for (u32 i = 0; i < 3u; i++)
-    {
-        stream = PLUGIN_coin_Checksum(stream ^ i, key);
-        stored[i] = data[i] ^ stream;
-    }
-    stored[3] = PLUGIN_coin_BlockChecksum(data, key);
-    u32 written = 0;
-    if (oldMask && (R_FAILED(PLUGIN_coin_FSFILE_Write(file, &written,
-            COIN_FILE_ACHIEVEMENT_OFFSET, oldAchievement,
-            sizeof(oldAchievement), 1u)) || written != sizeof(oldAchievement)))
-        return false;
-    written = 0;
-    u32 length = sizeof(stored);
-    return R_SUCCEEDED(PLUGIN_coin_FSFILE_Write(file, &written,
-        COIN_FILE_ACCOUNTING_OFFSET, stored, length, 1u)) && written == length;
-}
-
 PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateExtendedData(const u32 *data)
 {
     u32 counters = data[COIN_EXT_BLACKJACK_COUNTERS_WORD];
@@ -360,9 +208,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadExtendedState(
     if (outAchievementsEnabled)
         *outAchievementsEnabled = true;
 
-    if (fileSize != COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE &&
-        fileSize != COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE &&
-        fileSize != COIN_FILE_NO_ACHIEVEMENT_SIZE &&
+    if (fileSize != COIN_FILE_NO_ACHIEVEMENT_SIZE &&
         fileSize != COIN_FILE_WITH_ACHIEVEMENT_SIZE)
     {
         return false;
@@ -382,6 +228,26 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadExtendedState(
         !PLUGIN_coin_ValidateExtendedData(data))
     {
         return false;
+    }
+
+    if (fileSize == COIN_FILE_WITH_ACHIEVEMENT_SIZE)
+    {
+        u32 achievement[2];
+        u32 mask = 0;
+        read = 0;
+        if (R_FAILED(COIN_HOST__FSFILE_Read(
+                file,
+                &read,
+                COIN_FILE_ACHIEVEMENT_OFFSET,
+                achievement,
+                sizeof(achievement))) ||
+            read != sizeof(achievement) ||
+            !PLUGIN_coin_Decrypt(
+                achievement[0], achievement[1], key, &mask) ||
+            (mask & ~COIN_ACHIEVEMENT_MASK))
+        {
+            return false;
+        }
     }
 
     *outBlackjackSurplus = data[COIN_EXT_BLACKJACK_SURPLUS_WORD];
@@ -533,8 +399,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     u16 *coinDat,
     u32 *coinData,
     u16 *coinChange,
-    u32 homePointer,
-    u32 *accounting
+    u32 homePointer
 )
 {
     // grab vanilla coins before loading our extended state
@@ -624,51 +489,6 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
 
     if (baseValid)
     {
-        volatile u64 accountingSize = fileSize;
-        if (accountingSize == COIN_FILE_NO_ACHIEVEMENT_SIZE ||
-            accountingSize == COIN_FILE_WITH_ACHIEVEMENT_SIZE)
-        {
-            u32 stored[4];
-            u32 accountRead = 0;
-            Result accountRc = COIN_HOST__FSFILE_Read(file, &accountRead,
-                COIN_FILE_ACCOUNTING_OFFSET, stored, sizeof(stored));
-            if (R_FAILED(accountRc) || accountRead != sizeof(stored))
-            {
-                COIN_HOST__FSFILE_Close(file);
-                COIN_HOST__FSUSER_CloseArchive(sd);
-                return false;
-            }
-            if (!PLUGIN_coin_DecodeAccounting(stored, base[4], accounting))
-            {
-                // If our own snapshot failed its checksum, there is no
-                // trustworthy private copy left. Rebuild from validated NAND.
-                // Mirai may have changed those fields; this is a recovery
-                // fallback only, not an ordinary source of accounting.
-                if (!PLUGIN_coin_MigrateAccounting(file, fileSize, base[4], accounting))
-                {
-                    COIN_HOST__FSFILE_Close(file);
-                    COIN_HOST__FSUSER_CloseArchive(sd);
-                    return false;
-                }
-            }
-        }
-        else if (accountingSize == COIN_FILE_BASE_SIZE ||
-            accountingSize == COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE ||
-            accountingSize == COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE)
-        {
-            if (!PLUGIN_coin_MigrateAccounting(file, fileSize, base[4], accounting))
-            {
-                COIN_HOST__FSFILE_Close(file);
-                COIN_HOST__FSUSER_CloseArchive(sd);
-                return false;
-            }
-        }
-        else
-        {
-            COIN_HOST__FSFILE_Close(file);
-            COIN_HOST__FSUSER_CloseArchive(sd);
-            return false;
-        }
         // wipe Loader's one-shot invalid-base marker
         coinChange[1] = 0;
 
@@ -695,20 +515,6 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     }
     else
     {
-        // Only missing/legacy formats lack a protected snapshot. Initialise
-        // from NAND once so a fresh installation can save its first 0x50 block.
-        // A damaged new-format file must never be re-seeded from gamecoin.dat.
-        if (!sizeValid ||
-            !(fileSize == 0u || fileSize == COIN_FILE_BASE_SIZE ||
-              fileSize == COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE ||
-              fileSize == COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE) ||
-            !PLUGIN_coin_ImportAccounting(accounting))
-        {
-            COIN_HOST__FSFILE_Close(file);
-            COIN_HOST__FSUSER_CloseArchive(sd);
-            return false;
-        }
-
         // bad tracking state resets to vanilla, but keep a sane wallet
         coinData[2] = *coinDat;
         coinData[3] = 0;
