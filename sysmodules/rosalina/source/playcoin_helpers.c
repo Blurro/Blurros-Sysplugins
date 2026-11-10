@@ -611,6 +611,11 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistoryForDay(u32 currentDay)
 
     u32 delta = currentDay - lastDay;
 
+    bool preserved = (dayState & COIN_EXT_DAY_REBASE_PRESERVE) != 0u;
+    // Keep Today's floor until HOME has seen the corrected date.
+    if (preserved && delta <= 300u && !g_coinDayTransitionAuthorized)
+        return false;
+
     // huge forward jump is probably a clock correction
     if (delta > 300u)
     {
@@ -625,7 +630,8 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistoryForDay(u32 currentDay)
     {
         for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
             PLUGIN_coin_SetHistoryDay(i, 0);
-        PLUGIN_coin_SetTodayWalked(0);
+        if (!preserved)
+            PLUGIN_coin_SetTodayWalked(0);
     }
     else
     {
@@ -634,15 +640,16 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistoryForDay(u32 currentDay)
         {
             if ((u32)i >= delta)
                 PLUGIN_coin_SetHistoryDay((u32)i, PLUGIN_coin_GetHistoryDay((u32)i - delta));
-            else if ((u32)i + 1u == delta)
+            else if (!preserved && (u32)i + 1u == delta)
                 PLUGIN_coin_SetHistoryDay((u32)i, oldToday);
             else
                 PLUGIN_coin_SetHistoryDay((u32)i, 0);
         }
-        PLUGIN_coin_SetTodayWalked(0);
+        if (!preserved)
+            PLUGIN_coin_SetTodayWalked(0);
     }
 
-    // normal rotation starts a fresh HOME floor
+    // A correction ages older buckets but keeps Today out of yesterday.
     g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] = currentDay;
     g_coinExtendedDirty = true;
     return true;
@@ -655,6 +662,10 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_DayHistoryNeedsUpdate(u32 currentDay)
     u32 savedDay = dayState & COIN_EXT_DAY_VALUE_MASK;
     if (!currentDay || (savedDay && currentDay == savedDay))
         return false;
+
+    if (savedDay && (dayState & COIN_EXT_DAY_REBASE_PRESERVE) &&
+        currentDay > savedDay && currentDay - savedDay <= 300u)
+        return PLUGIN_coin_RtcDayDecisionPending();
 
     if (savedDay && !(dayState & COIN_EXT_DAY_REBASE_PRESERVE) &&
         savedDay != COIN_EXT_DAY_VALUE_MASK && currentDay == savedDay + 1u)
@@ -777,6 +788,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadExtendedData(Handle file, u32 key)
 PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadSavedAchievementMask(
     Handle file,
     u32 key,
+    u32 offset,
     u32 *outMask
 )
 {
@@ -786,7 +798,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadSavedAchievementMask(
     if (R_FAILED(COIN_HOST__FSFILE_Read(
             file,
             &read,
-            COIN_FILE_ACHIEVEMENT_OFFSET,
+            offset,
             stored,
             sizeof(stored))) ||
         read != sizeof(stored) ||
@@ -842,15 +854,35 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_GenerateRandomBytes(void *out, u32 s
     return rc;
 }
 
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidAccountingDate(u32 date)
+{
+    if (!date)
+        return true;
+    u32 year = date & 0xFFFFu;
+    u32 month = (date >> 16) & 0xFFu;
+    u32 day = date >> 24;
+    if (year < 2000u || year > 2127u || month < 1u || month > 12u || day < 1u)
+        return false;
+    u32 last = month == 2u ? 28u :
+        (month == 4u || month == 6u || month == 9u || month == 11u ? 30u : 31u);
+    if (month == 2u && !(year & 3u) && year != 2100u)
+        last++;
+    return day <= last;
+}
+
 PLUGIN_CODE(coin) static Result PLUGIN_coin_WriteFullState(
     Handle file,
     u32 wallet,
     u32 recommended,
     u32 lifetimeEarned,
-    u32 lifetimeSpent
+    u32 lifetimeSpent,
+    const u32 accounting[5]
 )
 {
-    u32 state[18];
+    if (!accounting || accounting[0] != 1u ||
+        accounting[1] > 0xFFFFu || !PLUGIN_coin_ValidAccountingDate(accounting[4]))
+        return (Result)-28;
+    u32 state[22];
     state[0] = wallet;
     state[1] = g_coinOffset;
     PLUGIN_coin_EncryptWithKey(lifetimeEarned, g_coinKey, &state[2], &state[3]);
@@ -859,16 +891,32 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_WriteFullState(
     state[7] = recommended;
     PLUGIN_coin_EncryptExtendedData(g_coinExtendedData, g_coinKey, &state[8]);
 
-    u32 words = 16u;
+    u32 date = accounting[4];
+    u32 year = date & 0xFFFFu;
+    u32 month = (date >> 16) & 0xFFu;
+    u32 day = date >> 24;
+    u32 packedDate = date ? ((year - 2000u) << 9) | (month << 5) | day : 0;
+    u32 plain[3] = {accounting[1] | (packedDate << 16), accounting[2], accounting[3]};
+    u32 stream = g_coinKey ^ COIN_FILE_HOME_ACCOUNTING_SEED;
+    u32 checksum = stream;
+    for (u32 i = 0; i < 3u; i++)
+    {
+        stream = PLUGIN_coin_Checksum(stream ^ i, g_coinKey);
+        state[16u + i] = plain[i] ^ stream;
+        checksum = PLUGIN_coin_Checksum(plain[i] ^ i, checksum ^ g_coinKey);
+    }
+    state[19] = checksum;
+
+    u32 words = 20u;
     if (g_coinAchievementSavePresent && g_coinAchievementSaveValid)
     {
         PLUGIN_coin_EncryptWithKey(
             g_coinAchievementSavedMask & COIN_ACHIEVEMENT_MASK,
             g_coinKey,
-            &state[16],
-            &state[17]
+            &state[20],
+            &state[21]
         );
-        words = 18u;
+        words = 22u;
     }
 
     u32 written = 0;

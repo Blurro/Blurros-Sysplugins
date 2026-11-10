@@ -29,7 +29,7 @@ extern void *pluginTable_coin[];
 #define COIN_NEWSLIST_ICON_PAGES 5u
 
 extern void PLUGIN_coin_ClearTransientHomePointer(void);
-extern bool PLUGIN_coin_InitializeHomeMenuState(u16 *coinDat, u32 *coinData, u16 *coinChange, u32 homePointer);
+extern bool PLUGIN_coin_InitializeHomeMenuState(u16 *coinDat, u32 *coinData, u16 *coinChange, u32 homePointer, u32 *accounting);
 extern void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize);
 extern bool PLUGIN_coin_AchievementsEnabledForLoader(void);
 
@@ -38,6 +38,11 @@ extern u32 PLUGIN_coin_bin[4];
 extern u16 PLUGIN_coin_change[4];
 extern u32 PLUGIN_coin_homePtr;
 extern u32 PLUGIN_coin_handoffControl;
+extern u32 PLUGIN_coin_accountingLoadTarget;
+extern u32 PLUGIN_coin_accountingLoadPrologue2;
+extern u32 PLUGIN_coin_accountingSaveTarget;
+extern void PLUGIN_coin_accountingLoadHook(void);
+extern void PLUGIN_coin_accountingSaveHook(void);
 extern u32 PLUGIN_coin_homeUIReturn;
 extern void PLUGIN_coin_homeLoaderPatch(void);
 extern void PLUGIN_coin_homeLoaderUIHook(void);
@@ -663,6 +668,36 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     }
 
     u32 *coinCalc = (u32*)(code + coinCalcRaw);
+    if (coinCalcRaw < 0x300u || textSize - coinCalcRaw < 0x4D8u)
+    {
+        PLUGIN_coin_ClearTransientHomePointer();
+        return;
+    }
+
+    // HOME's load/calc/save transaction is the same in old EUR and modern builds
+    u32 transaction = coinCalcOffset - 0x300u;
+    u32 *loadCall = (u32*)(code + transaction - 0x100000u);
+    u32 *saveCall = loadCall + 6;
+    u32 loadTarget = 0;
+    u32 saveTarget = 0;
+    if (!PLUGIN_coin_DecodeArmBlTarget(transaction, loadCall[0], &loadTarget) ||
+        loadCall[1] != 0xE1A04000u ||
+        loadCall[2] != 0xE28D001Cu ||
+        !PLUGIN_coin_DecodeArmBlTarget(transaction + 0x18u,
+            saveCall[0], &saveTarget) ||
+        saveCall[1] != 0xE1DD02B0u ||
+        loadTarget != coinCalcOffset + 0x364u ||
+        saveTarget != coinCalcOffset + 0x4D0u ||
+        ((u32*)(code + loadTarget - 0x100000u))[0] != 0xE92D43F8u ||
+        // The second load instruction copies the file object to r4.
+        // Verify it before replaying it in the trampoline.
+        ((u32*)(code + loadTarget - 0x100000u))[1] != 0xE1A04000u ||
+        ((u32*)(code + saveTarget - 0x100000u))[0] != 0xE92D40F0u ||
+        ((u32*)(code + saveTarget - 0x100000u))[1] != 0xE24DD00Cu)
+    {
+        PLUGIN_coin_ClearTransientHomePointer();
+        return;
+    }
     if (coinCalc[0x24u / 4u] != 0xE0570005u ||
         coinCalc[0x28u / 4u] != 0xE0D80006u ||
         coinCalc[0x2Cu / 4u] != 0xE58D5028u ||
@@ -728,12 +763,33 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     mappedHandoffControl[4] = 0;
     mappedHandoffControl[5] = 0;
     mappedHandoffControl[6] = 0;
-    if (!PLUGIN_coin_InitializeHomeMenuState(mappedDat, mappedBin, mappedChange, homePointer))
+    for (u32 i = 7; i < 13u; i++)
+        mappedHandoffControl[i] = 0;
+    if (!PLUGIN_coin_InitializeHomeMenuState(mappedDat, mappedBin,
+            mappedChange, homePointer, &mappedHandoffControl[7]))
     {
         PLUGIN_coin_UnmapOwnPage(stateMapBase);
         PLUGIN_coin_ClearTransientHomePointer();
         return;
     }
+
+    if (!PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_accountingLoadTarget, loadTarget + 8u) ||
+        !PLUGIN_coin_WriteOwnCodeWord(
+            (u32)&PLUGIN_coin_accountingLoadPrologue2,
+            ((u32*)(code + loadTarget - 0x100000u))[1]) ||
+        !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_accountingSaveTarget, saveTarget + 8u))
+    {
+        PLUGIN_coin_UnmapOwnPage(stateMapBase);
+        PLUGIN_coin_ClearTransientHomePointer();
+        return;
+    }
+
+    // Patch the shared load AND save helper entries, not individual
+    // callers: fallback/init and normal transactions must share one view.
+    u32 accountingPatch[2] = {0xE51FF004u, PLUGIN_coin_Phys(PLUGIN_coin_accountingLoadHook)};
+    PLUGIN_coin_PatchWords(code, loadTarget, accountingPatch, 2);
+    accountingPatch[1] = PLUGIN_coin_Phys(PLUGIN_coin_accountingSaveHook);
+    PLUGIN_coin_PatchWords(code, saveTarget, accountingPatch, 2);
 
     u32 patch[2] = {0xE51FF004u, PLUGIN_coin_Phys(PLUGIN_coin_homeLoaderPatch)};
     PLUGIN_coin_PatchWords(code, coinCalcOffset + 0x348u, patch, 2);
