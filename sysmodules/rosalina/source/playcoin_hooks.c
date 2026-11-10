@@ -45,6 +45,22 @@ extern volatile CoinStepDiagnostics PLUGIN_coin_stepDiagnostics;
 
 PLUGIN_DATA(coin) static volatile u32 *g_coinHandoffControl = NULL;
 
+PLUGIN_CODE(coin) bool PLUGIN_coin_CopyHomeAccounting(u32 out[5], u32 *generation)
+{
+    if (!g_coinHandoffControl || g_coinHandoffControl[7] != 1u)
+        return false;
+    for (u32 i = 0; i < 5u; i++)
+        out[i] = g_coinHandoffControl[7u + i];
+    *generation = g_coinHandoffControl[12];
+    return true;
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_HomeAccountingChanged(u32 savedGeneration)
+{
+    return g_coinHandoffControl && g_coinHandoffControl[7] == 1u &&
+        g_coinHandoffControl[12] != savedGeneration;
+}
+
 PLUGIN_CODE(coin) static u32 PLUGIN_coin_Phys(const void *pointer)
 {
     return COIN_HOST__svcConvertVAToPA(pointer, false) | 0x80000000u;

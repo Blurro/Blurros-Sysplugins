@@ -88,10 +88,10 @@ LOADER_PLUGIN_CONFIG=(
 # Re-running replaces that plugin's previous metadata. Already-stacked .3nx targets are warned and dropped.
 METADATA_CONFIG=(
     "blurPLGbase|version105.bin"
-    "coinrosalina|version109.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
+    "coinrosalina|version110.bin|coinasset_icn.lz|coinasset_achv.lz|easytop.binv|mediumtop.binv|hardtop.binv|extremtop.binv"
     "PowerPrevent|version101.bin"
     "HelloWorld|version101.bin"
-    "coinloader|version109.bin"
+    "coinloader|version110.bin"
     "IgnoreCfgNor-v101|version101.bin"
 )
 
