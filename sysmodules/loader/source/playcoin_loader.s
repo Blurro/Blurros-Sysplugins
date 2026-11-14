@@ -1,11 +1,10 @@
 .section .plugin_coin,"ax",%progbits
-.balign 4
+.balign 4096
 .arm
 
-@ home hooks; replayed bits below are from Nintendo HOME Menu
-@ the opcode checks live in Loader's playcoin_hooks.c
+@ replayed HOME instructions, opcode checks are in Loader's playcoin_hooks.c
 
-@ this handoff layout must match the rosalina copy
+@ this handoff layout must match the Rosalina copy
 .global PLUGIN_coin_dat
 PLUGIN_coin_dat:
     .hword 0
@@ -36,7 +35,7 @@ PLUGIN_coin_stepDiagnostics:
     .word 0
     .word 0
     .word 0 @ progressive earned this calc
-    .word 0 @ progressive tracked coins today
+    .word 0 @ progressive tracked coins Today
     .word 0 @ progressive step remainder
     .word 0 @ flat step remainder
     .word 0 @ split progression active
@@ -55,26 +54,151 @@ PLUGIN_coin_handoffControl:
     .word 0                      @ ignore RTC catch-up once
     .word 0                      @ RTC day decision: 0 waiting, 1 exact +1, 2 reject
     .word 0                      @ previous progressive step remainder
-    .word 0                      @ YYYY | MM << 16 | DD << 24 for this decision
+    .word 0                      @ yyyy | mm << 16 | dd << 24 for this decision
     .word 0                      @ calendar stamp being checked now
-    .word 0                      @ previous HOME coins today
+    .word 0                      @ previous HOME coins Today
     .word 0                      @ private accounting ready
-    .word 0                      @ coins today
+    .word 0                      @ coins Today
     .word 0                      @ live step boundary
     .word 0                      @ history boundary
     .word 0                      @ year | month << 16 | day << 24
     .word 0                      @ save generation
-    .word 0                      @ reset rebased HOME Today after forward correction
+    .word 0                      @ cap revisited-date history to new lifetime steps
+    .word 0                      @ Settings request: 0 idle, 1 waiting, 2 saved, 3 failed
+    .word 0                      @ Settings coins Today (normally zero)
+    .word 0                      @ Settings PTM total checkpoint
+    .word 0                      @ Settings day history checkpoint
+    .word 0                      @ Settings calendar date
+    .word 0                      @ saved flat mode and boundary offset
+    .word 0                      @ raw native Today before private overlay
+    .word 0                      @ raw native calendar date
+    .word 0                      @ raw native record pending this HOME calculation
+    .word 0                      @ saved day bucket ordinal and keep bit
+    .word 0                      @ old-day event state
+    .word 0                      @ old RTC low
+    .word 0                      @ old RTC high
+    .word 0                      @ old calendar date
+    .word 0                      @ new calendar date
+    .word 0                      @ old history boundary
+    .word 0                      @ old private Today
+    .word 0                      @ old shadow award
+    .word 0                      @ old wallet award
+    .word 0                      @ old wallet actually credited
+    .word 0                      @ generation before old-day save
+    .word 0                      @ active native record pointer
+    .word 0                      @ wallet before old-day award
+    .word 0                      @ earned counter before old-day award
+    .word 0                      @ native wallet before old-day award
+    .word 0                      @ wallet pointer for rollback
+    .word 0                      @ native wallet pointer for rollback
+    .word 0                      @ earned counter pointer for rollback
 
-@ Both 20-byte HOME record helpers are intercepted at their ENTRY points:
-@ every caller of either helper goes through the matching hook.
+@ Settings already calculated PTM checkpoints, so save ours before native gamecoin.dat
+.global PLUGIN_coin_settingsSaveTarget
+PLUGIN_coin_settingsSaveTarget: .word 0
+.global PLUGIN_coin_settingsSaveReturn
+PLUGIN_coin_settingsSaveReturn: .word 0
+
+.global PLUGIN_coin_settingsSaveHook
+PLUGIN_coin_settingsSaveHook:
+    push    {r4-r8, lr}
+    mov     r5, r1              @ calculated 20-byte record on Settings stack
+    adr     r7, PLUGIN_coin_handoffControl
+    ldr     r6, [r5]
+    mov     r8, #0x4f00
+    cmp     r6, r8
+    bne     settingsSaveInvalid
+
+    ldr     r6, =5000
+settingsSavePriorWait:
+    ldr     r8, [r7, #56]
+    cmp     r8, #0
+    beq     settingsSavePublish
+    cmp     r8, #2
+    beq     settingsSaveClearPrior
+    cmp     r8, #3
+    beq     settingsSaveAbort
+    ldr     r0, =1000000
+    mov     r1, #0
+    svc     #0x0a
+    subs    r6, r6, #1
+    bne     settingsSavePriorWait
+    b       settingsSaveAbort
+
+settingsSaveClearPrior:
+    mov     r8, #0
+    str     r8, [r7, #56]
+    mcr     p15, 0, r8, c7, c10, 5
+settingsSavePublish:
+
+    ldrh    r6, [r5, #6]
+    str     r6, [r7, #60]
+    ldr     r6, [r5, #8]
+    str     r6, [r7, #64]
+    ldr     r6, [r5, #12]
+    str     r6, [r7, #68]
+    ldr     r6, [r5, #16]
+    str     r6, [r7, #72]
+    mcr     p15, 0, r6, c7, c10, 5
+    mov     r6, #1
+    str     r6, [r7, #56]
+    mcr     p15, 0, r6, c7, c10, 5
+
+    ldr     r6, =5000
+settingsSaveWait:
+    ldr     r8, [r7, #56]
+    cmp     r8, #2
+    beq     settingsSaveReady
+    cmp     r8, #3
+    beq     settingsSaveAbort
+    ldr     r0, =1000000        @ 1 ms, bounded to five seconds
+    mov     r1, #0
+    svc     #0x0a              @ svcSleepThread
+    subs    r6, r6, #1
+    bne     settingsSaveWait
+
+settingsSaveAbort:
+    @ keep the request for retry, and don't save native before coins.bin catches up
+    mov     r6, #1
+    str     r6, [r7, #56]
+    mcr     p15, 0, r6, c7, c10, 5
+    mvn     r0, #0
+    b       settingsSaveReturn
+
+settingsSaveInvalid:
+    @ dont write an invalid Settings record past our protected cursor
+    mvn     r0, #0
+    b       settingsSaveReturn
+
+settingsSaveReady:
+    mov     r6, #0
+    str     r6, [r7, #56]
+    mcr     p15, 0, r6, c7, c10, 5
+settingsSaveOriginal:
+    ldrh    r8, [r5, #6]        @ request still has Settings' real Today
+    ldr     r6, [r7, #28]
+    cmp     r6, #1
+    moveq   r6, #11
+    streqh  r6, [r5, #6]        @ leave the native file locked after Settings
+    adr     r6, PLUGIN_coin_settingsSaveTarget
+    ldr     r6, [r6]
+    sub     r0, r5, #28         @ Settings' original file object
+    mov     r1, r5
+    blx     r6
+    strh    r8, [r5, #6]        @ do not let sentinel enter HOME's snapshot
+settingsSaveReturn:
+    pop     {r4-r8, lr}
+    cmp     r4, #0              @ Settings instruction displaced at +0x6c
+    ldr     pc, PLUGIN_coin_settingsSaveReturn
+    .ltorg
+
+@ hook both shared 20-byte HOME record helpers at entry, so every caller uses them
 .global PLUGIN_coin_accountingLoadTarget
 PLUGIN_coin_accountingLoadTarget: .word 0   @ original shared load helper + 8
 .global PLUGIN_coin_accountingSaveTarget
 PLUGIN_coin_accountingSaveTarget: .word 0   @ original shared save helper + 8
 
-@ Replay the original load-helper prologue and resume at the third word.
-@ Loader verifies both words before patching.
+@ replay the original load-helper prologue and resume at the third word Loader checks both words before patching
 PLUGIN_coin_accountingLoadOriginal:
     push    {r3-r9, lr}
 .global PLUGIN_coin_accountingLoadPrologue2
@@ -88,11 +212,16 @@ PLUGIN_coin_accountingLoadHook:
     mov     r4, r1
     adr     r6, PLUGIN_coin_handoffControl
     ldr     r8, [r6]            @ keep an outer load busy through nested saves
+    cmp     r8, #0
+    moveq   r7, #0
+    streq   r7, [r6, #88]       @ never replay a previous native observation
     mov     r7, #1
     str     r7, [r6]
     mcr     p15, 0, r7, c7, c10, 5
     bl      PLUGIN_coin_accountingLoadOriginal
     mov     r5, r0
+    cmp     r5, #0
+    blt     accountingLoadDone
     ldr     r6, [r4]
     mov     r7, #0x4f00
     cmp     r6, r7
@@ -101,6 +230,35 @@ PLUGIN_coin_accountingLoadHook:
     ldr     r7, [r6, #28]
     cmp     r7, #1
     bne     accountingLoadDone
+    cmp     r8, #0
+    bne     accountingLoadOverlay
+    ldrh    r7, [r4, #6]
+    cmp     r7, #10
+    bhi     accountingLoadClampWallet
+    str     r7, [r6, #80]
+    ldr     r0, [r4, #16]
+    str     r0, [r6, #84]
+    @ correct the native wallet before HOME sees private day/step fields or runs the coin calculator
+    ldrh    r0, [r4, #4]
+    cmp     r0, r7
+    movlo   r0, #0             @ game may have spent some new coins already
+    subhs   r0, r0, r7         @ never wrap the native u16 wallet
+    strh    r0, [r4, #4]
+    mov     r0, #1
+    str     r0, [r6, #88]
+accountingLoadClampWallet:
+    @ higher native balances cannot raise the trusted HOME wallet
+    ldrh    r0, [r4, #4]
+    adrl    r1, PLUGIN_coin_homePtr
+    ldr     r1, [r1]
+    ldr     r1, [r1, #4]
+    ldr     r1, [r1]
+    cmp     r1, #300
+    movhi   r1, #300
+    cmp     r0, r1
+    movhi   r0, r1
+    strh    r0, [r4, #4]
+accountingLoadOverlay:
     ldr     r7, [r6, #32]
     strh    r7, [r4, #6]
     ldr     r7, [r6, #36]
@@ -110,15 +268,28 @@ PLUGIN_coin_accountingLoadHook:
     ldr     r7, [r6, #44]
     str     r7, [r4, #16]
 accountingLoadDone:
-    @ HOME may skip the calculation/save. Restore only our own busy state.
+    @ don't replay yesterday's private cursor while Settings is still saving
+    adr     r6, PLUGIN_coin_handoffControl
+    ldr     r7, [r6, #56]
+    cmp     r7, #1
+    bne     accountingLoadFinish
+    ldr     r7, [r6, #60]
+    strh    r7, [r4, #6]
+    ldr     r7, [r6, #64]
+    str     r7, [r4, #8]
+    ldr     r7, [r6, #68]
+    str     r7, [r4, #12]
+    ldr     r7, [r6, #72]
+    str     r7, [r4, #16]
+accountingLoadFinish:
+    @ HOME may skip the calculation/save. restore only our own busy state
     adr     r6, PLUGIN_coin_handoffControl
     str     r8, [r6]
     mcr     p15, 0, r8, c7, c10, 5
     mov     r0, r5
-    pop     {r4-r8, pc}        @ return directly to whichever caller loaded
+    pop     {r4-r8, pc}        @ return directly to whatever caller loaded
 
-@ Replay the two verified helper-prologue words before entering +8.
-@ The normal helper epilogue returns through our BL to the hook.
+@ replay the two verified helper-prologue words before entering +8. the helper returns through our BL to the hook
 PLUGIN_coin_accountingSaveOriginal:
     push    {r4-r7, lr}
     sub     sp, sp, #0xc
@@ -133,32 +304,51 @@ PLUGIN_coin_accountingSaveHook:
     mov     r6, #1
     str     r6, [r5]
     mcr     p15, 0, r6, c7, c10, 5
+    ldrh    r6, [r4, #6]        @ keep HOME's real counter
+    ldr     r8, [r5, #28]
+    cmp     r8, #1
+    bne     accountingSaveNativeReady
+    ldr     r8, [r4]
+    mov     r5, #0x4f00
+    cmp     r8, r5
+    mov     r8, #11
+    streqh  r8, [r4, #6]        @ original writer sees the native lock
+accountingSaveNativeReady:
     bl      PLUGIN_coin_accountingSaveOriginal
-    mov     r8, r0              @ preserve the helper's return value
-    @ A load can create a default record. Keep the earlier private snapshot.
+    mov     r8, r0              @ keep the helper's return value
+    strh    r6, [r4, #6]        @ HOME and the private snapshot stay real
+    cmp     r8, #0
+    blt     accountingSaveDone  @ failed native save cannot advance snapshot
+    @ a load can make a default record, so keep the earlier private snapshot
     cmp     r7, #0
     bne     accountingSaveDone
-    @ Only a valid gamecoin record can become the new protected snapshot.
+    @ only trust a valid gamecoin record as the next snapshot
     ldr     r5, [r4]
     mov     r6, #0x4f00
     cmp     r5, r6
     bne     accountingSaveDone
     adr     r5, PLUGIN_coin_handoffControl
-    ldrh    r6, [r4, #6]
-    str     r6, [r5, #32]
+    ldrh    r6, [r4, #6]        @ original HOME Today was restored after native save
+    str     r6, [r5, #32]      @ publish real Today, never the 0x4f00 magic
     ldr     r6, [r4, #8]
     str     r6, [r5, #36]
     ldr     r6, [r4, #12]
     str     r6, [r5, #40]
     ldr     r6, [r4, #16]
     str     r6, [r5, #44]
-    mov     r6, #1
-    str     r6, [r5, #28]
     ldr     r6, [r5, #48]
     add     r6, r6, #1
     str     r6, [r5, #48]
+    ldr     r6, [r5, #76]
+    and     r6, r6, #0x40000000
+    str     r6, [r5, #76]        @ this snapshot needs a fresh flat checkpoint
+    mov     r6, #0
+    str     r6, [r5, #92]        @ the saved day bucket is stale too
     mcr     p15, 0, r6, c7, c10, 5
 accountingSaveDone:
+    mov     r0, r4
+    mov     r1, r8
+    bl      PLUGIN_coin_FinishHomeCatchupSave
     adr     r5, PLUGIN_coin_handoffControl
     str     r7, [r5]
     mcr     p15, 0, r7, c7, c10, 5
@@ -170,7 +360,7 @@ accountingSaveDone:
 PLUGIN_coin_rtcDayGateHook:
     @ protect the whole RTC decision, not only the later coin hooks
     push    {r0-r2}
-    adr     r0, PLUGIN_coin_handoffControl
+    adrl    r0, PLUGIN_coin_handoffControl
     mov     r1, #1
     str     r1, [r0]
 
@@ -189,23 +379,19 @@ PLUGIN_coin_rtcDayGateHook:
     sbcs    r0, r8, r6
     blt     rtcClockBehind
 
-    @ sbcs Z covers only the high-word result, so check both halves
+    @ sbcs z covers only the high-word result, so check both halves
     cmp     r7, r5
     bne     rtcClockAhead
     cmp     r8, r6
     beq     rtcClockSame
 
 rtcClockAhead:
-    @ exact +1 is remembered for one previous-day settlement
-    @ other forward gaps stay current-day-only
-    @ compare the full 64-bit gap against one day
+    @ exact +1 can settle yesterday, but other forward gaps only use today's steps
     push    {r1, r2}
     subs    r1, r7, r5
     sbcs    r2, r8, r6
 
-    @ After a backwards RTC correction, the first ordinary forward day
-    @ must restart the +3 shadow counter, not apply yesterday's floor.
-    @ Gaps greater than 300 days keep the existing correction policy.
+    @ after an RTC rollback, restart the +3 counter on the first real new day
     adr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0]
     ldr     r0, [r0, #8]
@@ -213,11 +399,9 @@ rtcClockAhead:
     cmp     r0, #0
     beq     rtcForwardFloorReady
 
-    @ A positive RTC delta alone need not mean the calendar day changed.
-    @ The old-day minimum is only retired when HOME observes a new date.
-    @ The handoff stamp was recorded at entry, before HOME edits the record.
+    @ a positive RTC jump isn't always a new day, so check the date before dropping the old floor
     push    {r1, r2}
-    adr     r0, PLUGIN_coin_handoffControl
+    adrl    r0, PLUGIN_coin_handoffControl
     ldr     r0, [r0, #20]
     ldrh    r1, [r4, #16]
     ldrb    r2, [r4, #18]
@@ -238,6 +422,11 @@ rtcClockAhead:
     cmp     r1, r0
     bhi     rtcForwardFloorReady
 rtcForwardClearFloor:
+    @ when revisiting a date, only count steps gained since our checkpoint
+    adrl    r0, PLUGIN_coin_handoffControl
+    mov     r1, #1
+    str     r1, [r0, #52]
+    mcr     p15, 0, r1, c7, c10, 5
     adr     r0, PLUGIN_coin_homePtr
     ldr     r0, [r0]
     ldr     r0, [r0, #8]
@@ -249,13 +438,6 @@ rtcForwardClearFloor:
     str     r1, [r0, #48]       @ previous split-calculation marker
     mcr     p15, 0, r1, c7, c10, 5
 
-    @ The HOME recalculation may read steps previously logged on this date.
-    @ They were NOT earned again: let the post-hook discard that rebased count
-    @ before Rosalina rotates its saved Today into yesterday.
-    adr     r0, PLUGIN_coin_handoffControl
-    mov     r1, #1
-    str     r1, [r0, #52]
-    mcr     p15, 0, r1, c7, c10, 5
     subs    r1, r7, r5
     sbcs    r2, r8, r6
 rtcForwardFloorReady:
@@ -271,7 +453,7 @@ rtcForwardFloorReady:
     bhi     rtcForwardSuppress
 
     @ only an exact Nintendo RTC +1 can settle yesterday
-    adr     r0, PLUGIN_coin_handoffControl
+    adrl    r0, PLUGIN_coin_handoffControl
     ldr     r1, [r0, #20]
     str     r1, [r0, #16]
     ldrh    r1, [r4, #6]
@@ -283,10 +465,16 @@ rtcForwardFloorReady:
     str     r2, [r0, #12]
     mov     r1, #1
     str     r1, [r0, #8]
+    push    {r0, r3, r12, lr}
+    mov     r0, r4
+    mov     r1, r5
+    mov     r2, r6
+    bl      PLUGIN_coin_PrepareHomeCatchup
+    pop     {r0, r3, r12, lr}
     b       rtcForwardReady
 
 rtcForwardReject:
-    adr     r0, PLUGIN_coin_handoffControl
+    adrl    r0, PLUGIN_coin_handoffControl
     ldr     r1, [r0, #20]
     str     r1, [r0, #16]
     mov     r1, #0
@@ -298,7 +486,7 @@ rtcForwardReject:
 
 rtcForwardSuppress:
     @ mark this before reading anything Rosalina can swap
-    adr     r0, PLUGIN_coin_handoffControl
+    adrl    r0, PLUGIN_coin_handoffControl
     ldr     r1, [r0, #20]
     str     r1, [r0, #16]
     mov     r1, #0
@@ -324,7 +512,9 @@ rtcForwardReady:
 rtcClockBehind:
     @ backwards gap: rebase the cursor and suppress this payout
     push    {r1}
-    adr     r0, PLUGIN_coin_handoffControl
+    adrl    r0, PLUGIN_coin_handoffControl
+    mov     r1, #0
+    str     r1, [r0, #52]
     ldr     r1, [r0, #20]
     str     r1, [r0, #16]
     mov     r1, #0
@@ -344,10 +534,9 @@ rtcClockBehind:
     b       rtcRebaseCurrentDay
 
 rtcClockSame:
-    @ equality rejects a displayed-date-only rollover
-    @ dont overwrite an exact +1 waiting for Rosalina
+    @ equality rejects a displayed-date-only rollover dont overwrite an exact +1 waiting for Rosalina
     push    {r1}
-    adr     r0, PLUGIN_coin_handoffControl
+    adrl    r0, PLUGIN_coin_handoffControl
     ldr     r1, [r0, #8]
     cmp     r1, #1
     beq     rtcClockSameReady
@@ -359,6 +548,9 @@ rtcClockSame:
     mov     r1, #2
     str     r1, [r0, #8]
 rtcClockSameReady:
+    push    {r0-r4, r12, lr}
+    bl      PLUGIN_coin_RetryHomeCatchup
+    pop     {r0-r4, r12, lr}
     pop     {r1}
     subs    r0, r7, r5
     sbcs    r0, r8, r6
@@ -369,7 +561,7 @@ rtcRebaseCurrentDay:
     mov     r5, r7
     mov     r6, r8
     mov     r0, #0
-    strh    r0, [r4, #6]         @ HOME coins today
+    strh    r0, [r4, #6]         @ HOME coins Today
     str     r0, [r4, #8]         @ force one current-day history query
     str     r0, [r4, #12]        @ no current-day history consumed yet
 
@@ -398,7 +590,24 @@ rtcThreeHundredDays:
 .balign 4
 .global PLUGIN_coin_homePtr
 PLUGIN_coin_homePtr:
-    .word 0                      @ 0x1642C8
+    .word 0                      @ 0x1642c8
+
+.global PLUGIN_coin_homePtmHistoryFunction
+PLUGIN_coin_homePtmHistoryFunction:
+    .word 0
+
+.global PLUGIN_coin_HomeHandoff
+.type   PLUGIN_coin_HomeHandoff, %function
+PLUGIN_coin_HomeHandoff:
+    adrl    r0, PLUGIN_coin_handoffControl
+    bx      lr
+
+.global PLUGIN_coin_HomePtmHistoryFunction
+.type   PLUGIN_coin_HomePtmHistoryFunction, %function
+PLUGIN_coin_HomePtmHistoryFunction:
+    adr     r0, PLUGIN_coin_homePtmHistoryFunction
+    ldr     r0, [r0]
+    bx      lr
 
 PLUGIN_coin_binLast:
     .word 0
@@ -458,9 +667,7 @@ PLUGIN_coin_homeLoaderPatch:
     mov     r7, #0
     str     r7, [r8, #48]
 afterSplitProgression:
-    @ dont let restored history remainder pay on the next wake
-    @ HOME keeps its rebuilt progressive display while both our streams
-    @ rebase at the full current history total
+    @ rebase both step streams to the current total so old remainder can't pay twice
     cmp     r0, #0
     beq     afterRtcBoundaryRebase
     ldr     r5, [r8, #24]
@@ -480,25 +687,7 @@ afterRtcBoundaryRebase:
     strloh  r7, [r4, #6]
     strlo   r7, [r8, #28]
 afterPreservedTodayFloor:
-    @ Only the first backwards-then-forwards rebase drops HOME's old log-derived
-    @ Today value. Otherwise Rosalina could rotate the saved Today and then
-    @ clamp the NEW Today back up using the same historical steps.
-    adrl    r7, PLUGIN_coin_handoffControl
-    ldr     r5, [r7, #52]
-    cmp     r5, #0
-    beq     afterRtcForwardTodayReset
-    mov     r5, #0
-    strh    r5, [r4, #6]
-    str     r5, [r8, #28]
-    str     r5, [r8, #36]
-    str     r5, [r8, #40]
-    str     r5, [r8, #44]
-    str     r5, [r8, #48]
-    str     r5, [r7, #52]
-    mcr     p15, 0, r5, c7, c10, 5
-afterRtcForwardTodayReset:
-
-    @ backwards RTC skips the pre hook; its record balance is still live
+    @ clock rollback skips pre hook, record balance still applies
     tst     r10, #1
     bne     currentPreBalanceReady
     cmp     r0, #0
@@ -535,7 +724,7 @@ currentEarnReady:
     @ coinsSpent calc
     mov     r5, #0
     ldr     r10, [r9]
-    ldrh    r10, [r10]            @ previous accepted Home Menu coins
+    ldrh    r10, [r10]            @ previous accepted HOME Menu coins
     cmp     r10, r11
     ble     skipSpent
     sub     r5, r10, r11
@@ -617,6 +806,13 @@ afterBinLogic:
     str     r7, [r5]
 
     strh    r6, [r4, #4]
+    push    {r0-r3, r12, lr}
+    mov     r0, r4
+    ldr     r1, [r9, #4]
+    ldr     r2, [r9]
+    ldr     r3, [r9, #8]
+    bl      PLUGIN_coin_ApplyHomeCatchup
+    pop     {r0-r3, r12, lr}
 
 finishHomeCalculation:
     ldr     r8, [r9, #0x24]
@@ -630,7 +826,7 @@ finishHomeCalculation:
 
 .global PLUGIN_coin_homeUIReturn
 PLUGIN_coin_homeUIReturn:
-    .word 0                       @ 0x1EEF18 on eur 11.5
+    .word 0                       @ 0x1eef18 on EUR 11.5
  
 .global PLUGIN_coin_homeLoaderUIHook
 .type   PLUGIN_coin_homeLoaderUIHook, %function
@@ -687,6 +883,22 @@ PLUGIN_coin_preCoinHook:
 .global PLUGIN_coin_historyDiagHook
 .type   PLUGIN_coin_historyDiagHook, %function
 PLUGIN_coin_historyDiagHook:
+    @ after rollback, cap reopened-date history to newly gained lifetime steps
+    adrl    r2, PLUGIN_coin_handoffControl
+    ldr     r1, [r2, #52]
+    mov     r3, #0
+    str     r3, [r2, #52]
+    cmp     r1, #0
+    beq     historyNewStepsReady
+    ldr     r1, [sp, #0xc]
+    ldr     r2, [r4, #8]
+    subs    r1, r1, r2
+    movlo   r1, #0
+    subs    r2, lr, r0
+    movlo   r2, #0
+    cmp     r2, r1
+    subhi   r0, lr, r1
+historyNewStepsReady:
     subs    sl, lr, r0
     mov     r3, #0
     ldr     r2, PLUGIN_coin_homePtr

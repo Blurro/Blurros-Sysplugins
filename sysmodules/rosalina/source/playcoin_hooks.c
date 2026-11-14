@@ -44,12 +44,64 @@ extern volatile CoinStepDiagnostics PLUGIN_coin_stepDiagnostics;
 #define COIN_HANDOFF_RETRY_NS    (1 * 1000 * 1000LL)
 
 PLUGIN_DATA(coin) static volatile u32 *g_coinHandoffControl = NULL;
+PLUGIN_DATA(coin) static bool g_coinHookIncompatible = false;
+
+// HOME is paused at a coin boundary whenever this changes
+PLUGIN_CODE(coin) void PLUGIN_coin_PublishAccountingReady(void)
+{
+    if (g_coinHandoffControl)
+    {
+        g_coinHandoffControl[7] = 1u;
+        COIN_HOST__svcFlushEntireDataCache();
+    }
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_HomeAccountingReady(void)
+{
+    return g_coinHandoffControl && g_coinHandoffControl[7] == 1u;
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_SettingsRequestPending(void)
+{
+    return g_coinHandoffControl && g_coinHandoffControl[14] == 1u;
+}
+
+// only call these with HOME locked at a coin boundary
+PLUGIN_CODE(coin) bool PLUGIN_coin_CopySettingsRequest(u32 out[4])
+{
+    if (!out || !PLUGIN_coin_SettingsRequestPending())
+        return false;
+    for (u32 i = 0; i < 4u; i++)
+        out[i] = g_coinHandoffControl[15u + i];
+    return true;
+}
+
+PLUGIN_CODE(coin) void PLUGIN_coin_FinishSettingsRequest(
+    const u32 accounting[5], bool saved, u32 *generation
+)
+{
+    if (!g_coinHandoffControl || g_coinHandoffControl[14] != 1u)
+        return;
+    if (saved && accounting && accounting[0] == 1u)
+    {
+        for (u32 i = 1u; i < 5u; i++)
+            g_coinHandoffControl[7u + i] = accounting[i];
+        g_coinHandoffControl[13] = 0;
+        g_coinHandoffControl[12]++;
+        if (generation)
+            *generation = g_coinHandoffControl[12];
+    }
+    COIN_HOST__svcFlushEntireDataCache();
+    g_coinHandoffControl[14] = saved ? 2u : 3u;
+    COIN_HOST__svcFlushEntireDataCache();
+}
 
 PLUGIN_CODE(coin) bool PLUGIN_coin_CopyHomeAccounting(u32 out[5], u32 *generation)
 {
-    if (!g_coinHandoffControl || g_coinHandoffControl[7] != 1u)
+    if (!g_coinHandoffControl || g_coinHandoffControl[7] > 1u)
         return false;
-    for (u32 i = 0; i < 5u; i++)
+    out[0] = 1u;
+    for (u32 i = 1u; i < 5u; i++)
         out[i] = g_coinHandoffControl[7u + i];
     *generation = g_coinHandoffControl[12];
     return true;
@@ -59,6 +111,58 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_HomeAccountingChanged(u32 savedGeneration)
 {
     return g_coinHandoffControl && g_coinHandoffControl[7] == 1u &&
         g_coinHandoffControl[12] != savedGeneration;
+}
+
+PLUGIN_CODE(coin) u32 PLUGIN_coin_HomeCatchupState(void)
+{
+    return g_coinHandoffControl ? g_coinHandoffControl[24] : 0u;
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_CopyHomeCatchup(u32 out[5])
+{
+    if (!g_coinHandoffControl || !out || g_coinHandoffControl[24] != 4u ||
+        g_coinHandoffControl[12] != g_coinHandoffControl[34] + 1u ||
+        g_coinHandoffControl[11] != g_coinHandoffControl[28])
+        return false;
+    out[0] = g_coinHandoffControl[27];
+    out[1] = g_coinHandoffControl[28];
+    out[2] = g_coinHandoffControl[31];
+    out[3] = g_coinHandoffControl[33];
+    out[4] = g_coinHandoffControl[12];
+    return true;
+}
+
+PLUGIN_CODE(coin) void PLUGIN_coin_AcknowledgeHomeCatchup(u32 generation)
+{
+    if (!g_coinHandoffControl || g_coinHandoffControl[24] != 4u ||
+        g_coinHandoffControl[12] != generation)
+        return;
+    g_coinHandoffControl[24] = 0u;
+    __dmb();
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_SetHomeFlatMode(bool flat)
+{
+    if (!g_coinHandoffControl)
+        return false;
+    bool oldFlat = (g_coinHandoffControl[19] & 0x40000000u) != 0u;
+    if (oldFlat == flat)
+        return false;
+    g_coinHandoffControl[19] = flat ? 0x40000000u : 0u;
+    __dmb();
+    return true;
+}
+
+PLUGIN_CODE(coin) void PLUGIN_coin_PublishSavedExtension(
+    u32 generation, u32 todayWord, u32 dayState)
+{
+    if (!g_coinHandoffControl || g_coinHandoffControl[12] != generation)
+        return;
+    g_coinHandoffControl[19] =
+        ((todayWord & 0x40000000u) ? 0x40000000u : 0u) |
+        ((todayWord >> 16) & 0x3FFFu);
+    g_coinHandoffControl[23] = dayState;
+    __dmb();
 }
 
 PLUGIN_CODE(coin) static u32 PLUGIN_coin_Phys(const void *pointer)
@@ -126,13 +230,21 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_PatchMenuCallback(
     u32 rwSize
 )
 {
-    (void)textSize;
     (void)roSize;
     (void)rwSize;
 
-    u32 *loaderPointers = (u32*)g_coinOffset;
     Result rc = 0;
     bool threadsLocked = false;
+    u32 mappedOffset = g_coinOffset - 0x00100000u;
+    if (g_coinOffset < 0x00100000u ||
+        mappedOffset > textSize || textSize - mappedOffset < 11u * sizeof(u32))
+    {
+        g_coinHookIncompatible = true;
+        rc = (Result)-1;
+        goto cleanup;
+    }
+
+    u32 *loaderPointers = (u32*)g_coinOffset;
 
     if (loaderPointers[3] != 0x0061004Du ||
         loaderPointers[4] != 0x00650078u ||
@@ -141,6 +253,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_PatchMenuCallback(
         loaderPointers[10] != 0xE1A00000u ||
         (loaderPointers[9] & 0x80000003u) != 0x80000000u)
     {
+        g_coinHookIncompatible = true;
         rc = (Result)-1;
         goto cleanup;
     }
@@ -201,12 +314,26 @@ cleanup:
     return rc;
 }
 
-PLUGIN_CODE(coin) bool PLUGIN_coin_AttachHomeMenu(void)
+PLUGIN_CODE(coin) bool PLUGIN_coin_AttachHomeMenu(bool *incompatible)
 {
-    return R_SUCCEEDED(COIN_HOST__OperateOnProcessByName(
+    g_coinHookIncompatible = false;
+    Result rc = COIN_HOST__OperateOnProcessByName(
         g_coinMenuProcessName,
         PLUGIN_coin_PatchMenuCallback
-    ));
+    );
+    if (incompatible)
+        *incompatible = g_coinHookIncompatible;
+    // a published handoff stays live even if the final unlock fails
+    return R_SUCCEEDED(rc) || g_coinHandoffControl != NULL;
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_HomeMenuLoaded(void)
+{
+    Handle processHandle = 0;
+    if (R_FAILED(COIN_HOST__OpenProcessByName(g_coinMenuProcessName, &processHandle)))
+        return false;
+    COIN_HOST__svcCloseHandle(processHandle);
+    return true;
 }
 
 PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcDayDecision(void)

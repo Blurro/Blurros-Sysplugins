@@ -62,9 +62,16 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_ResetExtendedData(void)
 PLUGIN_CODE(coin) static void PLUGIN_coin_SyncAchievementSettingToExtendedData(void)
 {
     u32 oldValue = g_coinExtendedData[COIN_EXT_TODAY_WORD];
+    bool flatChanged = ((oldValue & COIN_EXT_FLAT_WALLET) != 0) ==
+        g_coinProgressiveCostEnabled;
     u32 newValue = g_coinAchievementsEnabled ?
         oldValue & ~COIN_EXT_ACHIEVEMENTS_DISABLED :
         oldValue | COIN_EXT_ACHIEVEMENTS_DISABLED;
+    newValue = g_coinProgressiveCostEnabled ?
+        newValue & ~COIN_EXT_FLAT_WALLET :
+        newValue | COIN_EXT_FLAT_WALLET;
+    if (flatChanged)
+        newValue &= ~COIN_EXT_FLAT_CHECKPOINT_MASK;
 
     if (newValue != oldValue)
     {
@@ -129,69 +136,6 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTrackedAccounting(void)
         coinsRec = 30000u;
 }
 
-#define COIN_DAY_MS 86400000ULL
-#define COIN_Y2K_DAY_ORDINAL 36525u
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadDayStepTotal(
-    u32 dayOrdinal,
-    u32 *outSteps
-)
-{
-    if (!outSteps || dayOrdinal < COIN_Y2K_DAY_ORDINAL)
-        return false;
-
-    volatile u16 buckets[24];
-    for (u32 i = 0; i < 24u; i++)
-        buckets[i] = 0;
-
-    Handle handle = 0;
-    Result rc = COIN_HOST__srvGetServiceHandle(&handle, g_coinPtmU);
-    if (R_FAILED(rc))
-        return false;
-
-    u64 queryMs = (u64)(dayOrdinal - COIN_Y2K_DAY_ORDINAL) * COIN_DAY_MS;
-    u32 *cmdbuf = PLUGIN_coin_CommandBuffer();
-    cmdbuf[0] = 0x000B00C2u;
-    cmdbuf[1] = 24u;
-    cmdbuf[2] = (u32)queryMs;
-    cmdbuf[3] = (u32)(queryMs >> 32);
-    cmdbuf[4] = IPC_Desc_Buffer(sizeof(buckets), IPC_BUFFER_W);
-    cmdbuf[5] = (u32)buckets;
-
-    rc = COIN_HOST__svcSendSyncRequest(handle);
-    if (R_SUCCEEDED(rc))
-        rc = (Result)cmdbuf[1];
-    COIN_HOST__svcCloseHandle(handle);
-    if (R_FAILED(rc))
-        return false;
-
-    u32 total = 0;
-    for (u32 i = 0; i < 24u; i++)
-        total += buckets[i];
-    *outSteps = total;
-    return true;
-}
-
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_ProgressiveCoinsForCompletedDay(u32 steps)
-{
-    u32 coins = 0;
-    u32 cost = 100u;
-    while (steps >= cost && coins < 0xFFFFu)
-    {
-        steps -= cost;
-        coins++;
-        if (coins >= 10u && cost <= 0xFFFFFFFCu)
-            cost += 3u;
-    }
-    return coins;
-}
-
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_CoinsForCompletedDay(u32 steps)
-{
-    return g_coinProgressiveCostEnabled ?
-        PLUGIN_coin_ProgressiveCoinsForCompletedDay(steps) : steps / 100u;
-}
-
 PLUGIN_CODE(coin) static u32 PLUGIN_coin_ProgressiveStepsSpent(u32 coins)
 {
     u32 spent = 0;
@@ -206,76 +150,6 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_ProgressiveStepsSpent(u32 coins)
             cost += 3u;
     }
     return spent;
-}
-
-PLUGIN_CODE(coin) static u32 PLUGIN_coin_PreparePreviousDayCatchup(
-    u32 currentDay,
-    u32 currentStamp,
-    u32 *completedBucketOut,
-    u32 *walletMissingOut,
-    u32 *trackedMissingOut
-)
-{
-    if (!completedBucketOut || !walletMissingOut || !trackedMissingOut)
-        return COIN_PREVDAY_NONE;
-
-    *completedBucketOut = 0;
-    *walletMissingOut = 0;
-    *trackedMissingOut = 0;
-    if (!PLUGIN_coin_RtcExactNextDayPending() || !currentStamp ||
-        PLUGIN_coin_RtcDecisionCalendarStamp() != currentStamp)
-    {
-        return COIN_PREVDAY_NONE;
-    }
-
-    u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
-    u32 savedDay = dayState & COIN_EXT_DAY_VALUE_MASK;
-    if (!currentDay || !savedDay ||
-        (dayState & COIN_EXT_DAY_REBASE_PRESERVE) ||
-        savedDay == COIN_EXT_DAY_VALUE_MASK || currentDay != savedDay + 1u)
-    {
-        return COIN_PREVDAY_NONE;
-    }
-
-    u32 previousDaySteps = 0;
-    if (!PLUGIN_coin_ReadDayStepTotal(savedDay, &previousDaySteps))
-        return COIN_PREVDAY_RETRY;
-
-    u32 walletTarget = PLUGIN_coin_CoinsForCompletedDay(previousDaySteps);
-    u32 progressiveTarget =
-        PLUGIN_coin_ProgressiveCoinsForCompletedDay(previousDaySteps);
-    u32 progressiveClaimed = PLUGIN_coin_GetTodayWalked();
-    u32 homeClaimed = PLUGIN_coin_RtcPreviousCoinsToday();
-    if (progressiveClaimed < homeClaimed)
-        progressiveClaimed = homeClaimed;
-    u32 walletClaimed = progressiveClaimed;
-    if (!g_coinProgressiveCostEnabled)
-    {
-        u32 nextCost = progressiveClaimed < 10u ?
-            100u : 100u + 3u * (progressiveClaimed - 9u);
-        u32 remainder = PLUGIN_coin_RtcPreviousProgressiveRemainder();
-        u32 spent = PLUGIN_coin_ProgressiveStepsSpent(progressiveClaimed);
-
-        // dont award flat coins if the current state looks wrong
-        if (spent == 0xFFFFFFFFu || remainder >= nextCost ||
-            spent > 0xFFFFFFFFu - remainder)
-        {
-            walletClaimed = walletTarget;
-            progressiveClaimed = progressiveTarget;
-        }
-        else
-        {
-            walletClaimed = (spent + remainder) / 100u;
-        }
-    }
-
-    // the rolling buckets always keep the +3 progression shadow
-    *completedBucketOut = progressiveTarget;
-    *walletMissingOut = walletTarget > walletClaimed ?
-        walletTarget - walletClaimed : 0;
-    *trackedMissingOut = progressiveTarget > progressiveClaimed ?
-        progressiveTarget - progressiveClaimed : 0;
-    return COIN_PREVDAY_READY;
 }
 
 PLUGIN_CODE(coin) static Result PLUGIN_coin_OpenGameCoinFile(
@@ -307,62 +181,6 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_OpenGameCoinFile(
     if (R_FAILED(rc))
         COIN_HOST__FSUSER_CloseArchive(*archive);
     return rc;
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_WriteVanillaCoinBalance(u16 amount)
-{
-    FS_Archive archive;
-    Handle file;
-    Result rc = PLUGIN_coin_OpenGameCoinFile(&archive, &file, FS_OPEN_WRITE);
-    if (R_FAILED(rc))
-        return false;
-
-    u32 written = 0;
-    rc = COIN_HOST__FSFILE_Write(
-        file,
-        &written,
-        4,
-        &amount,
-        sizeof(amount),
-        FS_WRITE_FLUSH
-    );
-    if (R_SUCCEEDED(rc) && written != sizeof(amount))
-        rc = (Result)-1;
-    Result closeRc = COIN_HOST__FSFILE_Close(file);
-    if (R_SUCCEEDED(rc) && R_FAILED(closeRc))
-        rc = closeRc;
-
-    Result archiveCloseRc = COIN_HOST__FSUSER_CloseArchive(archive);
-    if (R_SUCCEEDED(rc) && R_FAILED(archiveCloseRc))
-        rc = archiveCloseRc;
-    return R_SUCCEEDED(rc);
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_ApplyPreviousDayCatchup(
-    u32 walletMissing,
-    u32 trackedMissing
-)
-{
-    u32 room = coinsBin < 30000u ? 30000u - coinsBin : 0u;
-    u32 walletCredited = walletMissing < room ? walletMissing : room;
-    if (!walletCredited && !trackedMissing)
-        return true;
-
-    u32 vanilla = (u32)g_coinDat + walletCredited;
-    u16 newVanilla = (u16)(vanilla > 300u ? 300u : vanilla);
-    if (newVanilla != g_coinDat && !PLUGIN_coin_WriteVanillaCoinBalance(newVanilla))
-        return false;
-
-    coinsBin += walletCredited;
-    g_coinDat = newVanilla;
-    coinsTrue = PLUGIN_coin_SaturatingAdd(coinsTrue, trackedMissing);
-    coinsRec = PLUGIN_coin_SaturatingAdd(coinsRec, trackedMissing);
-    PLUGIN_coin_ClampTrackedAccounting();
-
-    g_coinExtendedDirty = true;
-    if (trackedMissing)
-        g_coinEarnedEventPending = true;
-    return true;
 }
 
 PLUGIN_CODE(coin) bool PLUGIN_coin_RecordBlackjackDeposit(
@@ -418,6 +236,8 @@ PLUGIN_CODE(coin) u32 PLUGIN_coin_RecordBlackjackQualified(u32 qualifiedCoins)
 
     u32 deposited = PLUGIN_coin_GetBlackjackDeposited();
     u32 qualified = PLUGIN_coin_GetBlackjackQualified();
+    if (qualified >= deposited)
+        goto rejected;
     u32 remaining = deposited - qualified;
     u32 credited = qualifiedCoins < remaining ? qualifiedCoins : remaining;
     if (!credited)
@@ -584,6 +404,8 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistoryForDay(u32 currentDay)
     if (!lastDay)
     {
         g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] = currentDay;
+        g_coinExtendedData[COIN_EXT_TODAY_WORD] &=
+            ~COIN_EXT_FLAT_CHECKPOINT_MASK;
         PLUGIN_coin_SetTodayWalked(0);
         g_coinExtendedDirty = true;
         return true;
@@ -603,6 +425,8 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistoryForDay(u32 currentDay)
     // clock went backwards, just move the bucket anchor
     if (currentDay < lastDay)
     {
+        g_coinExtendedData[COIN_EXT_TODAY_WORD] &=
+            ~COIN_EXT_FLAT_CHECKPOINT_MASK;
         g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] =
             currentDay | COIN_EXT_DAY_REBASE_PRESERVE;
         g_coinExtendedDirty = true;
@@ -612,9 +436,12 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistoryForDay(u32 currentDay)
     u32 delta = currentDay - lastDay;
 
     bool preserved = (dayState & COIN_EXT_DAY_REBASE_PRESERVE) != 0u;
-    // Keep Today's floor until HOME has seen the corrected date.
+    // keep today's floor until HOME sees the corrected date
     if (preserved && delta <= 300u && !g_coinDayTransitionAuthorized)
         return false;
+
+    g_coinExtendedData[COIN_EXT_TODAY_WORD] &=
+        ~COIN_EXT_FLAT_CHECKPOINT_MASK;
 
     // huge forward jump is probably a clock correction
     if (delta > 300u)
@@ -647,9 +474,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_UpdateDayHistoryForDay(u32 currentDay)
         PLUGIN_coin_SetTodayWalked(0);
     }
 
-    // A forward day ALWAYS rotates the completed Today into history exactly once.
-    // The backward-correction flag only holds the previous bucket until HOME
-    // confirms this new day; it does not extend the earning day.
+    // rotate the finished day once, but hold it through rollback until HOME confirms
     g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] = currentDay;
     g_coinExtendedDirty = true;
     return true;
@@ -748,7 +573,8 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateExtendedData(const u32 *data)
     return deposited <= COIN_BLACKJACK_COUNTER_MAX &&
         qualified <= deposited &&
         (data[COIN_EXT_TODAY_WORD] &
-            ~(0x0000FFFFu | COIN_EXT_ACHIEVEMENTS_DISABLED)) == 0;
+            ~(0x0000FFFFu | COIN_EXT_ACHIEVEMENTS_DISABLED |
+                COIN_EXT_FLAT_WALLET | COIN_EXT_FLAT_CHECKPOINT_MASK)) == 0;
 }
 
 PLUGIN_CODE(coin) static Result PLUGIN_coin_WriteExtendedData(Handle file, u32 key)
@@ -770,18 +596,20 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_WriteExtendedData(Handle file, u32 k
     return rc;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadExtendedData(Handle file, u32 key)
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadExtendedData(
+    Handle file, u32 key, bool *ioFailed)
 {
+    *ioFailed = false;
     u32 stored[COIN_FILE_EXTENSION_WORDS + 1u];
     u32 read = 0;
-    return R_SUCCEEDED(COIN_HOST__FSFILE_Read(
-            file,
-            &read,
-            COIN_FILE_EXTENSION_OFFSET,
-            stored,
-            sizeof(stored))) &&
-        read == sizeof(stored) &&
-        PLUGIN_coin_DecryptExtendedData(stored, key, g_coinExtendedData) &&
+    Result rc = COIN_HOST__FSFILE_Read(file, &read,
+        COIN_FILE_EXTENSION_OFFSET, stored, sizeof(stored));
+    if (R_FAILED(rc) || read != sizeof(stored))
+    {
+        *ioFailed = true;
+        return false;
+    }
+    return PLUGIN_coin_DecryptExtendedData(stored, key, g_coinExtendedData) &&
         PLUGIN_coin_ValidateExtendedData(g_coinExtendedData);
 }
 
@@ -789,20 +617,22 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadSavedAchievementMask(
     Handle file,
     u32 key,
     u32 offset,
-    u32 *outMask
+    u32 *outMask,
+    bool *ioFailed
 )
 {
+    *ioFailed = false;
     u32 stored[2];
     u32 read = 0;
     u32 mask = 0;
-    if (R_FAILED(COIN_HOST__FSFILE_Read(
-            file,
-            &read,
-            offset,
-            stored,
-            sizeof(stored))) ||
-        read != sizeof(stored) ||
-        !PLUGIN_coin_DecryptWithKey(stored[0], stored[1], key, &mask) ||
+    Result rc = COIN_HOST__FSFILE_Read(file, &read,
+        offset, stored, sizeof(stored));
+    if (R_FAILED(rc) || read != sizeof(stored))
+    {
+        *ioFailed = true;
+        return false;
+    }
+    if (!PLUGIN_coin_DecryptWithKey(stored[0], stored[1], key, &mask) ||
         (mask & ~COIN_ACHIEVEMENT_MASK))
     {
         return false;
@@ -814,15 +644,21 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadSavedAchievementMask(
 
 PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadAndValidateBase(
     Handle file,
-    u32 base[8]
+    u32 base[8],
+    bool *ioFailed
 )
 {
+    *ioFailed = false;
     u32 read = 0;
     u32 lifetimeEarned = 0;
     u32 lifetimeSpent = 0;
-    if (R_FAILED(COIN_HOST__FSFILE_Read(file, &read, 0, base, 8u * sizeof(u32))) ||
-        read != 8u * sizeof(u32) ||
-        base[0] > 30000u || base[1] <= 0x100000u || base[7] > 30000u ||
+    Result rc = COIN_HOST__FSFILE_Read(file, &read, 0, base, 8u * sizeof(u32));
+    if (R_FAILED(rc) || read != 8u * sizeof(u32))
+    {
+        *ioFailed = true;
+        return false;
+    }
+    if (base[0] > 30000u || base[1] <= 0x100000u || base[7] > 30000u ||
         !PLUGIN_coin_DecryptWithKey(base[2], base[3], base[4], &lifetimeEarned) ||
         !PLUGIN_coin_DecryptWithKey(base[5], base[6], base[4], &lifetimeSpent))
     {
@@ -922,14 +758,16 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_WriteFullState(
     u32 written = 0;
     u32 size = words * sizeof(u32);
 
-    // only truncate when replacing an oversized file; normal writes extend it
+    // only shrink oversized saves, normal writes grow the file
     u64 oldSize = 0;
-    Result sizeRc = COIN_HOST__FSFILE_GetSize(file, &oldSize);
+    Result rc = COIN_HOST__FSFILE_GetSize(file, &oldSize);
+    if (R_FAILED(rc))
+        return rc;
 
-    Result rc = COIN_HOST__FSFILE_Write(file, &written, 0, state, size, FS_WRITE_FLUSH);
+    rc = COIN_HOST__FSFILE_Write(file, &written, 0, state, size, FS_WRITE_FLUSH);
     if (R_SUCCEEDED(rc) && written != size)
         rc = (Result)-29;
-    if (R_SUCCEEDED(rc) && (R_FAILED(sizeRc) || oldSize > size))
+    if (R_SUCCEEDED(rc) && oldSize > size)
         rc = COIN_HOST__FSFILE_SetSize(file, size);
     return rc;
 }

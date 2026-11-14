@@ -27,12 +27,15 @@
 #define COIN_EXT_BLACKJACK_SURPLUS_WORD  1u
 #define COIN_EXT_TODAY_WORD              6u
 #define COIN_EXT_ACHIEVEMENTS_DISABLED   (1u << 31)
+#define COIN_EXT_FLAT_WALLET             (1u << 30)
+#define COIN_EXT_FLAT_CHECKPOINT_MASK    0x3FFF0000u
 #define COIN_BLACKJACK_COUNTER_MAX       30000u
 #define COIN_ACHIEVEMENT_MASK            0x0003FFFFu
 
 extern Result PLUGIN_coin_svcSendSyncRequest(Handle handle);
 extern bool PLUGIN_coin_PrepareHomeMenu(PluginMenuLoaderContext *context);
 extern bool PLUGIN_coin_PrepareNewsList(PluginMenuLoaderContext *context);
+extern bool PLUGIN_coin_PrepareSettings(PluginMenuLoaderContext *context);
 extern void PLUGIN_coin_NewsListProcessCreated(PluginMenuLoaderContext *context);
 
 PLUGIN_DATA(coin) void *pluginTable_coin[] = {
@@ -48,6 +51,10 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)PLUGIN_MENU_RegisterHomePatch,
     (void*)PLUGIN_MENU_UnregisterHomePatch,
     (void*)PLUGIN_MENU_GetApiVersion,
+    (void*)PLUGIN_MENU_MapPage,
+    (void*)PLUGIN_MENU_UnmapPage,
+    (void*)PLUGIN_MENU_TempAlloc,
+    (void*)PLUGIN_MENU_TempFree,
 };
 
 #define COIN_HOST__FSUSER_OpenArchive  ((Result(*)(FS_Archive*,FS_ArchiveID,FS_Path))pluginTable_coin[0])
@@ -62,6 +69,10 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_MENU__RegisterHomePatch   ((bool(*)(PluginMenuLoaderHomePatch*))pluginTable_coin[9])
 #define COIN_MENU__UnregisterHomePatch ((bool(*)(PluginMenuLoaderHomePatch*))pluginTable_coin[10])
 #define COIN_MENU__GetApiVersion       ((u32(*)(void))pluginTable_coin[11])
+#define COIN_MENU__MapPage             ((bool(*)(Handle,u32,u32*,u32*))pluginTable_coin[12])
+#define COIN_MENU__UnmapPage           ((void(*)(u32))pluginTable_coin[13])
+#define COIN_MENU__TempAlloc           ((bool(*)(u32,u32*))pluginTable_coin[14])
+#define COIN_MENU__TempFree            ((void(*)(u32,u32))pluginTable_coin[15])
 
 PLUGIN_RODATA(coin) static const char g_coinFilePath[] = "/luma/coins.bin";
 PLUGIN_RODATA(coin) static const char g_gameCoinPath[] = "/gamecoin.dat";
@@ -72,6 +83,14 @@ PLUGIN_RODATA(coin) static const u64 g_coinNewsListTitleIds[] = {
     0x000400300000A802ULL,
     0x000400300000B002ULL,
     0x000400300000B802ULL,
+};
+PLUGIN_RODATA(coin) static const u64 g_coinSettingsTitleIds[] = {
+    0x0004001000020000ULL, // Japan
+    0x0004001000021000ULL, // USA
+    0x0004001000022000ULL, // europe
+    0x0004001000026000ULL, // China
+    0x0004001000027000ULL, // Korea
+    0x0004001000028000ULL, // Taiwan
 };
 
 PLUGIN_DATA(coin) static PluginMenuLoaderHomePatch g_coinHomePatch = {
@@ -84,6 +103,15 @@ PLUGIN_DATA(coin) static PluginMenuLoaderTitlePatch g_coinNewsListPatch = {
     .titleIdCount = sizeof(g_coinNewsListTitleIds) / sizeof(g_coinNewsListTitleIds[0]),
     .prepare = PLUGIN_coin_PrepareNewsList,
     .processCreated = PLUGIN_coin_NewsListProcessCreated,
+    .loaderFinished = NULL,
+    .next = NULL,
+    .menuEpoch = 0,
+};
+PLUGIN_DATA(coin) static PluginMenuLoaderTitlePatch g_coinSettingsPatch = {
+    .titleIds = g_coinSettingsTitleIds,
+    .titleIdCount = sizeof(g_coinSettingsTitleIds) / sizeof(g_coinSettingsTitleIds[0]),
+    .prepare = PLUGIN_coin_PrepareSettings,
+    .processCreated = NULL,
     .loaderFinished = NULL,
     .next = NULL,
     .menuEpoch = 0,
@@ -123,6 +151,20 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_FSFILE_Write(
         *bytesWritten = cmdbuf[2];
 
     return (Result)cmdbuf[1];
+}
+
+PLUGIN_CODE(coin) static Result PLUGIN_coin_FSFILE_SetSize(Handle file, u64 size)
+{
+    u8 *tls;
+    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tls));
+    u32 *cmdbuf = (u32*)(tls + 0x80);
+
+    cmdbuf[0] = 0x08050080u;
+    cmdbuf[1] = (u32)size;
+    cmdbuf[2] = (u32)(size >> 32);
+
+    Result rc = PLUGIN_coin_svcSendSyncRequest(file);
+    return R_FAILED(rc) ? rc : (Result)cmdbuf[1];
 }
 
 PLUGIN_CODE(coin) static u32 PLUGIN_coin_Checksum(u32 value, u32 key)
@@ -235,80 +277,58 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_DecodeAccounting(
     return true;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_ImportAccounting(u32 *accounting)
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ImportAccounting(
+    u32 *accounting, bool *ioFailed)
 {
+    *ioFailed = false;
     FS_Archive archive;
     FS_Path archivePath;
     archivePath.type = PATH_BINARY;
     archivePath.size = sizeof(g_gameCoinArchivePath);
     archivePath.data = g_gameCoinArchivePath;
     if (R_FAILED(COIN_HOST__FSUSER_OpenArchive(&archive, ARCHIVE_SHARED_EXTDATA, archivePath)))
+    {
+        *ioFailed = true;
         return false;
+    }
     Handle file = 0;
     bool good = false;
-    if (R_SUCCEEDED(COIN_HOST__FSUSER_OpenFile(&file, archive,
-            COIN_HOST__fsMakePath(PATH_ASCII, g_gameCoinPath), FS_OPEN_READ, 0)))
+    Result rc = COIN_HOST__FSUSER_OpenFile(&file, archive,
+        COIN_HOST__fsMakePath(PATH_ASCII, g_gameCoinPath), FS_OPEN_READ, 0);
+    if (R_SUCCEEDED(rc))
     {
         u32 record[5];
         u32 read = 0;
-        if (R_SUCCEEDED(COIN_HOST__FSFILE_Read(file, &read, 0, record, sizeof(record))) &&
-            read == sizeof(record) && record[0] == 0x4F00u &&
+        rc = COIN_HOST__FSFILE_Read(file, &read, 0, record, sizeof(record));
+        if (R_FAILED(rc))
+            *ioFailed = true;
+        if (!*ioFailed && read == sizeof(record) &&
+            record[0] == 0x4F00u &&
             (record[1] & 0xFFFFu) <= 300u &&
+            (record[1] >> 16) <= 11u &&
             PLUGIN_coin_AccountingDate(record[4]))
         {
             accounting[0] = 1;
-            accounting[1] = record[1] >> 16;
+            accounting[1] = (record[1] >> 16) > 10u ? 10u : (record[1] >> 16);
             accounting[2] = record[2];
             accounting[3] = record[3];
             accounting[4] = record[4];
             good = true;
         }
-        COIN_HOST__FSFILE_Close(file);
+        if (R_FAILED(COIN_HOST__FSFILE_Close(file)))
+            *ioFailed = true;
     }
-    COIN_HOST__FSUSER_CloseArchive(archive);
-    return good;
+    else
+        *ioFailed = true;
+    if (R_FAILED(COIN_HOST__FSUSER_CloseArchive(archive)))
+        *ioFailed = true;
+    return good && !*ioFailed;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_MigrateAccounting(
-    Handle file, u64 fileSize, u32 key, u32 *accounting)
+// rewrite only the private 0x40..0x4f block
+PLUGIN_CODE(coin) static bool PLUGIN_coin_WriteAccountingBlock(
+    Handle file, u32 key, const u32 *accounting)
 {
-    u32 oldAchievement[2];
-    bool oldMask = fileSize == COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE;
-    u32 read = 0;
-    if (oldMask)
-    {
-        if (R_FAILED(COIN_HOST__FSFILE_Read(file, &read,
-                COIN_FILE_ACCOUNTING_OFFSET, oldAchievement,
-                sizeof(oldAchievement))) || read != sizeof(oldAchievement))
-            return false;
-        u32 mask = 0;
-        // An invalid optional mask must not poison otherwise valid accounting.
-        if (!PLUGIN_coin_Decrypt(oldAchievement[0], oldAchievement[1],
-                key, &mask) || (mask & ~COIN_ACHIEVEMENT_MASK))
-            oldMask = false;
-    }
-    if (!PLUGIN_coin_ImportAccounting(accounting))
-        return false;
-    if (fileSize == COIN_FILE_BASE_SIZE)
-    {
-        // Old base-only saves get the usual empty walking extension.
-        u32 empty[COIN_FILE_EXTENSION_WORDS] = {0};
-        u32 storedExtension[COIN_FILE_EXTENSION_WORDS + 1u];
-        u32 stream = key ^ COIN_FILE_EXTENSION_SEED;
-        for (u32 i = 0; i < COIN_FILE_EXTENSION_WORDS; i++)
-        {
-            stream = PLUGIN_coin_Checksum(stream ^ i, key);
-            storedExtension[i] = stream;
-        }
-        storedExtension[COIN_FILE_EXTENSION_WORDS] =
-            PLUGIN_coin_ExtendedDataChecksum(empty, key);
-        u32 written = 0;
-        if (R_FAILED(PLUGIN_coin_FSFILE_Write(file, &written,
-                COIN_FILE_EXTENSION_OFFSET, storedExtension,
-                sizeof(storedExtension), 1u)) ||
-            written != sizeof(storedExtension))
-            return false;
-    }
     u32 packed = 0;
     if (accounting[4])
         packed = ((accounting[4] & 0xFFFFu) - 2000u) << 9 |
@@ -323,14 +343,28 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_MigrateAccounting(
     }
     stored[3] = PLUGIN_coin_BlockChecksum(data, key);
     u32 written = 0;
-    if (oldMask && (R_FAILED(PLUGIN_coin_FSFILE_Write(file, &written,
-            COIN_FILE_ACHIEVEMENT_OFFSET, oldAchievement,
-            sizeof(oldAchievement), 1u)) || written != sizeof(oldAchievement)))
-        return false;
-    written = 0;
-    u32 length = sizeof(stored);
     return R_SUCCEEDED(PLUGIN_coin_FSFILE_Write(file, &written,
-        COIN_FILE_ACCOUNTING_OFFSET, stored, length, 1u)) && written == length;
+        COIN_FILE_ACCOUNTING_OFFSET, stored, sizeof(stored), 1u)) &&
+        written == sizeof(stored);
+}
+
+// keep native step boundaries and use the verified Today bucket
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ResetAccounting(
+    u32 *accounting, u32 today)
+{
+    bool ioFailed = false;
+    if (!PLUGIN_coin_ImportAccounting(accounting, &ioFailed))
+    {
+        if (ioFailed)
+            return false;
+        accounting[0] = 1u;
+        accounting[1] = 0u;
+        accounting[2] = 0u;
+        accounting[3] = 0u;
+        accounting[4] = 0u;
+    }
+    accounting[1] = today > 0xFFFFu ? 0xFFFFu : today;
+    return true;
 }
 
 PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateExtendedData(const u32 *data)
@@ -342,7 +376,8 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ValidateExtendedData(const u32 *data)
     return deposited <= COIN_BLACKJACK_COUNTER_MAX &&
         qualified <= deposited &&
         (data[COIN_EXT_TODAY_WORD] &
-            ~(0x0000FFFFu | COIN_EXT_ACHIEVEMENTS_DISABLED)) == 0;
+            ~(0x0000FFFFu | COIN_EXT_ACHIEVEMENTS_DISABLED |
+                COIN_EXT_FLAT_WALLET | COIN_EXT_FLAT_CHECKPOINT_MASK)) == 0;
 }
 
 PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadExtendedState(
@@ -350,41 +385,62 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadExtendedState(
     u64 fileSize,
     u32 key,
     u32 *outBlackjackSurplus,
-    bool *outAchievementsEnabled
+    bool *outAchievementsEnabled,
+    u32 *outTodayBucket,
+    bool *outFlatWallet,
+    u32 *outFlatCheckpoint,
+    u32 *outDayState,
+    bool *ioFailed
 )
 {
+    if (ioFailed)
+        *ioFailed = false;
     if (!outBlackjackSurplus)
         return false;
 
     *outBlackjackSurplus = 0;
     if (outAchievementsEnabled)
         *outAchievementsEnabled = true;
+    if (outTodayBucket)
+        *outTodayBucket = 0;
+    if (outFlatWallet)
+        *outFlatWallet = false;
+    if (outFlatCheckpoint)
+        *outFlatCheckpoint = 0;
+    if (outDayState)
+        *outDayState = 0;
 
-    if (fileSize != COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE &&
-        fileSize != COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE &&
-        fileSize != COIN_FILE_NO_ACHIEVEMENT_SIZE &&
-        fileSize != COIN_FILE_WITH_ACHIEVEMENT_SIZE)
-    {
+    // the extension has its own checksum, so a bad suffix doesn't break it
+    if (fileSize < COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE)
         return false;
-    }
 
     u32 stored[COIN_FILE_EXTENSION_WORDS + 1u];
     u32 data[COIN_FILE_EXTENSION_WORDS];
     u32 read = 0;
-    if (R_FAILED(COIN_HOST__FSFILE_Read(
-            file,
-            &read,
-            COIN_FILE_EXTENSION_OFFSET,
-            stored,
-            sizeof(stored))) ||
-        read != sizeof(stored) ||
-        !PLUGIN_coin_DecryptExtendedData(stored, key, data) ||
+    Result rc = COIN_HOST__FSFILE_Read(file, &read,
+        COIN_FILE_EXTENSION_OFFSET, stored, sizeof(stored));
+    if (R_FAILED(rc) || read != sizeof(stored))
+    {
+        if (ioFailed)
+            *ioFailed = true;
+        return false;
+    }
+    if (!PLUGIN_coin_DecryptExtendedData(stored, key, data) ||
         !PLUGIN_coin_ValidateExtendedData(data))
     {
         return false;
     }
 
     *outBlackjackSurplus = data[COIN_EXT_BLACKJACK_SURPLUS_WORD];
+    if (outTodayBucket)
+        *outTodayBucket = (u16)data[COIN_EXT_TODAY_WORD];
+    if (outFlatWallet)
+        *outFlatWallet = (data[COIN_EXT_TODAY_WORD] & COIN_EXT_FLAT_WALLET) != 0;
+    if (outFlatCheckpoint)
+        *outFlatCheckpoint = (data[COIN_EXT_TODAY_WORD] &
+            COIN_EXT_FLAT_CHECKPOINT_MASK) >> 16;
+    if (outDayState)
+        *outDayState = data[2];
     if (outAchievementsEnabled)
     {
         *outAchievementsEnabled =
@@ -440,7 +496,12 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_AchievementsEnabledForLoader(void)
                 fileSize,
                 base[4],
                 &blackjackSurplus,
-                &enabled
+                &enabled,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL
             );
         }
         COIN_HOST__FSFILE_Close(file);
@@ -450,12 +511,14 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_AchievementsEnabledForLoader(void)
     return enabled;
 }
 
-PLUGIN_CODE(coin) static Result PLUGIN_coin_GetPlayCoins(u16 *out)
+PLUGIN_CODE(coin) static Result PLUGIN_coin_GetPlayCoins(
+    u16 *out, u16 *outToday)
 {
-    if (!out)
+    if (!out || !outToday)
         return (Result)-1;
 
     *out = 0;
+    *outToday = 0;
 
     FS_Archive archive;
     Handle file;
@@ -482,13 +545,23 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_GetPlayCoins(u16 *out)
         return res;
     }
 
-    u32 read;
-    res = COIN_HOST__FSFILE_Read(file, &read, 4, out, sizeof(*out));
-    if (R_SUCCEEDED(res) && read == sizeof(*out) && *out > 300)
-        *out = 300;
-    else if (R_FAILED(res) || read != sizeof(*out))
+    // wallet and Today are adjacent halfwords, so read Today even if other native fields are bad
+    u32 read = 0;
+    u32 nativeWalletToday = 0;
+    res = COIN_HOST__FSFILE_Read(file, &read, 4,
+        &nativeWalletToday, sizeof(nativeWalletToday));
+    if (R_SUCCEEDED(res) && read == sizeof(nativeWalletToday))
+    {
+        *out = (u16)nativeWalletToday;
+        if (*out > 300u)
+            *out = 300u;
+        u32 today = nativeWalletToday >> 16;
+        *outToday = (u16)(today > 10u ? 10u : today);
+    }
+    else
     {
         *out = 0;
+        *outToday = 0;
         if (R_SUCCEEDED(res))
             res = (Result)-1;
     }
@@ -512,7 +585,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_ClearTransientHomePointer(void)
         return;
     }
 
-    // clear the old Home Menu pointer only on failed setup
+    // clear the old HOME Menu pointer only on failed setup
     if (R_SUCCEEDED(COIN_HOST__FSUSER_OpenFile(
         &file,
         sd,
@@ -529,6 +602,39 @@ PLUGIN_CODE(coin) void PLUGIN_coin_ClearTransientHomePointer(void)
     COIN_HOST__FSUSER_CloseArchive(sd);
 }
 
+PLUGIN_CODE(coin) static bool PLUGIN_coin_NormalizeCoinFile(
+    Handle file, u64 *fileSize)
+{
+    u64 size = *fileSize;
+    if (size == COIN_FILE_BASE_SIZE ||
+        size == COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE ||
+        size == COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE ||
+        size == COIN_FILE_NO_ACHIEVEMENT_SIZE ||
+        size == COIN_FILE_WITH_ACHIEVEMENT_SIZE)
+        return true;
+
+    if (size > COIN_FILE_WITH_ACHIEVEMENT_SIZE)
+    {
+        if (R_FAILED(PLUGIN_coin_FSFILE_SetSize(file,
+                COIN_FILE_WITH_ACHIEVEMENT_SIZE)))
+            return false;
+    }
+    else
+    {
+        u8 zeros[COIN_FILE_WITH_ACHIEVEMENT_SIZE];
+        volatile u8 *clear = zeros;
+        for (u32 i = 0; i < sizeof(zeros); i++)
+            clear[i] = 0;
+        u32 written = 0;
+        u32 length = COIN_FILE_WITH_ACHIEVEMENT_SIZE - (u32)size;
+        if (R_FAILED(PLUGIN_coin_FSFILE_Write(file, &written, size,
+                zeros, length, 1u)) || written != length)
+            return false;
+    }
+    *fileSize = COIN_FILE_WITH_ACHIEVEMENT_SIZE;
+    return true;
+}
+
 PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     u16 *coinDat,
     u32 *coinData,
@@ -539,7 +645,8 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
 {
     // grab vanilla coins before loading our extended state
     u16 systemCoins = 0;
-    if (R_FAILED(PLUGIN_coin_GetPlayCoins(&systemCoins)))
+    u16 nativeToday = 0;
+    if (R_FAILED(PLUGIN_coin_GetPlayCoins(&systemCoins, &nativeToday)))
         return false;
     *coinDat = systemCoins;
 
@@ -571,14 +678,33 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     for (u32 i = 0; i < 8u; i++)
         baseWords[i] = 0;
 
+    u64 fileSize = 0;
+    rc = COIN_HOST__FSFILE_GetSize(file, &fileSize);
+    if (R_FAILED(rc))
+    {
+        COIN_HOST__FSFILE_Close(file);
+        COIN_HOST__FSUSER_CloseArchive(sd);
+        return false;
+    }
+    u64 originalSize = fileSize;
+    if (!PLUGIN_coin_NormalizeCoinFile(file, &fileSize))
+    {
+        COIN_HOST__FSFILE_Close(file);
+        COIN_HOST__FSUSER_CloseArchive(sd);
+        return false;
+    }
+
     u32 read = 0;
     rc = COIN_HOST__FSFILE_Read(file, &read, 0, base, sizeof(base));
-    bool baseReadSucceeded = R_SUCCEEDED(rc);
-    u64 fileSize = 0;
-    bool sizeValid = R_SUCCEEDED(COIN_HOST__FSFILE_GetSize(file, &fileSize));
+    if (R_FAILED(rc) || read != sizeof(base))
+    {
+        COIN_HOST__FSFILE_Close(file);
+        COIN_HOST__FSUSER_CloseArchive(sd);
+        return false;
+    }
 
     // wallet is standalone, bad tracking data shouldnt wipe it
-    bool walletValid = baseReadSucceeded && read >= sizeof(u32) && base[0] <= 30000u;
+    bool walletValid = originalSize >= sizeof(u32) && base[0] <= 30000u;
     u32 coins;
     if (walletValid)
     {
@@ -597,7 +723,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
         }
     }
 
-    // hand Home Menu its live pointer before releasing the file
+    // hand HOME Menu its live pointer before releasing the file
     rc = PLUGIN_coin_FSFILE_Write(
         file,
         &written,
@@ -616,35 +742,49 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     // bad/missing extension just means no Blackjack surplus yet
     u32 lifetimeEarned = 0;
     u32 lifetimeSpent = 0;
-    bool baseValid = sizeValid && fileSize >= COIN_FILE_BASE_SIZE &&
-        baseReadSucceeded && read == sizeof(base) &&
+    bool flatWallet = false;
+    u32 flatCheckpoint = 0;
+    u32 dayState = 0;
+    bool baseValid = originalSize >= COIN_FILE_BASE_SIZE &&
         walletValid && base[7] <= 30000u &&
         PLUGIN_coin_Decrypt(base[2], base[3], base[4], &lifetimeEarned) &&
         PLUGIN_coin_Decrypt(base[5], base[6], base[4], &lifetimeSpent);
-
     if (baseValid)
     {
+        u32 blackjackSurplus = 0;
+        u32 todayBucket = 0;
+        bool extensionIoFailed = false;
+        bool extensionValid = PLUGIN_coin_ReadExtendedState(file, fileSize, base[4],
+            &blackjackSurplus, NULL, &todayBucket,
+            &flatWallet, &flatCheckpoint, &dayState,
+            &extensionIoFailed);
+        if (extensionIoFailed)
+        {
+            COIN_HOST__FSFILE_Close(file);
+            COIN_HOST__FSUSER_CloseArchive(sd);
+            return false;
+        }
         volatile u64 accountingSize = fileSize;
-        if (accountingSize == COIN_FILE_NO_ACHIEVEMENT_SIZE ||
-            accountingSize == COIN_FILE_WITH_ACHIEVEMENT_SIZE)
+        if (accountingSize >= COIN_FILE_NO_ACHIEVEMENT_SIZE)
         {
             u32 stored[4];
             u32 accountRead = 0;
             Result accountRc = COIN_HOST__FSFILE_Read(file, &accountRead,
                 COIN_FILE_ACCOUNTING_OFFSET, stored, sizeof(stored));
-            if (R_FAILED(accountRc) || accountRead != sizeof(stored))
+            if (R_FAILED(accountRc))
             {
+                // SD read failure isn't a checksum failure
                 COIN_HOST__FSFILE_Close(file);
                 COIN_HOST__FSUSER_CloseArchive(sd);
                 return false;
             }
-            if (!PLUGIN_coin_DecodeAccounting(stored, base[4], accounting))
+            if (accountRead != sizeof(stored) ||
+                !PLUGIN_coin_DecodeAccounting(stored, base[4], accounting))
             {
-                // If our own snapshot failed its checksum, there is no
-                // trustworthy private copy left. Rebuild from validated NAND.
-                // Mirai may have changed those fields; this is a recovery
-                // fallback only, not an ordinary source of accounting.
-                if (!PLUGIN_coin_MigrateAccounting(file, fileSize, base[4], accounting))
+                // recover this block from the verified Today bucket
+                if (!PLUGIN_coin_ResetAccounting(accounting,
+                        extensionValid ? todayBucket : 0u) ||
+                    !PLUGIN_coin_WriteAccountingBlock(file, base[4], accounting))
                 {
                     COIN_HOST__FSFILE_Close(file);
                     COIN_HOST__FSUSER_CloseArchive(sd);
@@ -656,7 +796,8 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
             accountingSize == COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE ||
             accountingSize == COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE)
         {
-            if (!PLUGIN_coin_MigrateAccounting(file, fileSize, base[4], accounting))
+            if (!PLUGIN_coin_ResetAccounting(accounting,
+                    extensionValid ? todayBucket : 0u))
             {
                 COIN_HOST__FSFILE_Close(file);
                 COIN_HOST__FSUSER_CloseArchive(sd);
@@ -665,21 +806,19 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
         }
         else
         {
-            COIN_HOST__FSFILE_Close(file);
-            COIN_HOST__FSUSER_CloseArchive(sd);
-            return false;
+            // a short or unknown suffix needs a fresh private block
+            if (!PLUGIN_coin_ResetAccounting(accounting,
+                    extensionValid ? todayBucket : 0u) ||
+                !PLUGIN_coin_WriteAccountingBlock(file, base[4], accounting))
+            {
+                COIN_HOST__FSFILE_Close(file);
+                COIN_HOST__FSUSER_CloseArchive(sd);
+                return false;
+            }
         }
         // wipe Loader's one-shot invalid-base marker
         coinChange[1] = 0;
 
-        u32 blackjackSurplus = 0;
-        (void)PLUGIN_coin_ReadExtendedState(
-            file,
-            fileSize,
-            base[4],
-            &blackjackSurplus,
-            NULL
-        );
         u32 capacity = PLUGIN_coin_SaturatingAdd(lifetimeEarned, blackjackSurplus);
         if (lifetimeSpent > capacity)
             lifetimeSpent = capacity;
@@ -695,30 +834,61 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     }
     else
     {
-        // Only missing/legacy formats lack a protected snapshot. Initialise
-        // from NAND once so a fresh installation can save its first 0x50 block.
-        // A damaged new-format file must never be re-seeded from gamecoin.dat.
-        if (!sizeValid ||
-            !(fileSize == 0u || fileSize == COIN_FILE_BASE_SIZE ||
-              fileSize == COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE ||
-              fileSize == COIN_FILE_OLD_WITH_ACHIEVEMENT_SIZE) ||
-            !PLUGIN_coin_ImportAccounting(accounting))
+        u32 todayBucket = 0;
+        bool extensionValid = false;
+        u32 ignoredSurplus = 0;
+        bool extensionIoFailed = false;
+        extensionValid = PLUGIN_coin_ReadExtendedState(file, fileSize, base[4],
+            &ignoredSurplus, NULL, &todayBucket,
+            &flatWallet, &flatCheckpoint, &dayState,
+            &extensionIoFailed);
+        if (extensionIoFailed)
         {
             COIN_HOST__FSFILE_Close(file);
             COIN_HOST__FSUSER_CloseArchive(sd);
             return false;
         }
 
-        // bad tracking state resets to vanilla, but keep a sane wallet
+        // repair missing lifetime tracking from native data, with Today capped at 10
+        bool privateValid = false;
+        if (originalSize >= COIN_FILE_NO_ACHIEVEMENT_SIZE)
+        {
+            u32 stored[4];
+            u32 accountRead = 0;
+            rc = COIN_HOST__FSFILE_Read(file, &accountRead,
+                COIN_FILE_ACCOUNTING_OFFSET, stored, sizeof(stored));
+            if (R_FAILED(rc) || accountRead != sizeof(stored))
+            {
+                COIN_HOST__FSFILE_Close(file);
+                COIN_HOST__FSUSER_CloseArchive(sd);
+                return false;
+            }
+            privateValid = PLUGIN_coin_DecodeAccounting(stored, base[4], accounting);
+        }
+        if (!privateValid && !PLUGIN_coin_ResetAccounting(accounting,
+                extensionValid ? todayBucket : nativeToday))
+        {
+            COIN_HOST__FSFILE_Close(file);
+            COIN_HOST__FSUSER_CloseArchive(sd);
+            return false;
+        }
+
+        // reset bad tracking from native, keep the wallet
         coinData[2] = *coinDat;
         coinData[3] = 0;
         coinData[1] = coinData[2];
 
-        // 0x8000 tells the first Home Menu pass to ignore fake historical spend
-        // it cant clash with a real spend since tracked coins cap at 30000
+        // 0x8000 skips fake past spending on first HOME pass, since real spends cap at 30k
         coinChange[1] = 0x8000u;
     }
     coinData[0] = coins;
+    coinChange[3] = flatWallet ? 0u : 1u;
+    accounting[12] = flatCheckpoint |
+        (flatWallet ? COIN_EXT_FLAT_WALLET : 0u);
+    accounting[16] = dayState;
+    // fresh and legacy files wait for the first full save and native lock
+    if (originalSize < COIN_FILE_NO_ACHIEVEMENT_SIZE)
+        accounting[0] = 0;
 
     COIN_HOST__FSFILE_Close(file);
     COIN_HOST__FSUSER_CloseArchive(sd);
@@ -732,7 +902,208 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     if (coinData[0] > coins)
         *coinDat += (u16)(coinData[0] - coins);
 
+    if (accounting[0] == 1u)
+    {
+        // after reboot use the trusted wallet baseline, since native may include fake awards
+        *coinDat = (u16)(coinData[0] > 300u ? 300u : coinData[0]);
+    }
+
     return true;
+}
+
+extern volatile u32 *PLUGIN_coin_HomeHandoff(void);
+extern u32 PLUGIN_coin_HomePtmHistoryFunction(void);
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_CatchupLeapYear(u32 year)
+{
+    return year % 4u == 0u && (year % 100u != 0u || year % 400u == 0u);
+}
+
+PLUGIN_CODE(coin) static u32 PLUGIN_coin_CatchupOrdinal(u32 date)
+{
+    u32 year = date & 0xFFFFu;
+    u32 month = (date >> 16) & 0xFFu;
+    u32 day = date >> 24;
+    if (year < 2000u || year > 2127u || month < 1u || month > 12u)
+        return 0;
+    u32 limit = 31u;
+    if (month == 2u)
+        limit = 28u + (PLUGIN_coin_CatchupLeapYear(year) ? 1u : 0u);
+    else if (month == 4u || month == 6u || month == 9u || month == 11u)
+        limit = 30u;
+    if (!day || day > limit)
+        return 0;
+
+    u32 ordinal = 1u;
+    for (u32 y = 1900u; y < year; y++)
+        ordinal += PLUGIN_coin_CatchupLeapYear(y) ? 366u : 365u;
+    for (u32 m = 1u; m < month; m++)
+    {
+        if (m == 2u)
+            ordinal += PLUGIN_coin_CatchupLeapYear(year) ? 29u : 28u;
+        else
+            ordinal += m == 4u || m == 6u || m == 9u || m == 11u ? 30u : 31u;
+    }
+    return ordinal + day - 1u;
+}
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_QueryHomeCatchup(void)
+{
+    volatile u32 *state = PLUGIN_coin_HomeHandoff();
+    u32 queryAddress = PLUGIN_coin_HomePtmHistoryFunction();
+    if (state[24] != 1u || !queryAddress ||
+        state[5] != state[28] ||
+        (state[12] != state[34] && state[11] != state[28]))
+        return;
+
+    u16 history[24];
+    volatile u16 *clear = history;
+    for (u32 i = 0; i < 24u; i++)
+        clear[i] = 0;
+    Result (*query)(u16 *, u32, u32, u32) =
+        (Result (*)(u16 *, u32, u32, u32))queryAddress;
+    Result rc = query(history, 24u, state[25], state[26]);
+    if (R_FAILED(rc))
+        return;
+
+    u32 total = 0;
+    for (u32 i = 0; i < 24u; i++)
+        total += history[i];
+    u32 boundary = state[29];
+    if (boundary > total)
+    {
+        state[24] = 0;
+        return;
+    }
+
+    u32 steps = total - boundary;
+    u32 oldToday = state[30];
+    u32 shadow = 0;
+    while (oldToday + shadow < 0xFFFFu)
+    {
+        u32 count = oldToday + shadow;
+        u32 cost = count < 10u ? 100u : 100u + 3u * (count - 9u);
+        if (steps < cost)
+            break;
+        steps -= cost;
+        shadow++;
+    }
+
+    u32 wallet = shadow;
+    if (state[33] & 0x40000000u)
+    {
+        u32 code = state[33] & 0x3FFFu;
+        if (code)
+        {
+            s64 flatBoundary = (s64)boundary + (s32)code - 8192;
+            if (flatBoundary >= 0 && flatBoundary <= total)
+                wallet = (total - (u32)flatBoundary) / 100u;
+        }
+    }
+
+    state[31] = shadow;
+    state[32] = wallet;
+    __dmb();
+    state[24] = 2u;
+}
+
+PLUGIN_CODE(coin) void PLUGIN_coin_PrepareHomeCatchup(
+    const u8 *record, u32 oldTimeLow, u32 oldTimeHigh)
+{
+    volatile u32 *state = PLUGIN_coin_HomeHandoff();
+    if ((state[24] == 1u || state[24] == 2u) &&
+        state[5] != state[28])
+        state[24] = 0u;
+    if (state[24] || !record || state[7] != 1u || state[13] ||
+        state[14] || *(const u32 *)record != 0x4F00u)
+        return;
+
+    u32 oldDate = *(const u32 *)(record + 16);
+    u32 newDate = state[5];
+    u32 oldOrdinal = PLUGIN_coin_CatchupOrdinal(oldDate);
+    if (!oldOrdinal || PLUGIN_coin_CatchupOrdinal(newDate) != oldOrdinal + 1u ||
+        state[11] != oldDate || state[8] != *(const u16 *)(record + 6) ||
+        state[10] != *(const u32 *)(record + 12) ||
+        (state[23] & 0x80000000u) ||
+        (state[23] & 0x7FFFFFFFu) != oldOrdinal)
+        return;
+
+    state[25] = oldTimeLow;
+    state[26] = oldTimeHigh;
+    state[27] = oldDate;
+    state[28] = newDate;
+    state[29] = *(const u32 *)(record + 12);
+    state[30] = *(const u16 *)(record + 6);
+    state[33] = state[19];
+    state[34] = state[12];
+    state[24] = 1u;
+    PLUGIN_coin_QueryHomeCatchup();
+}
+
+PLUGIN_CODE(coin) void PLUGIN_coin_RetryHomeCatchup(void)
+{
+    volatile u32 *state = PLUGIN_coin_HomeHandoff();
+    if ((state[24] == 1u || state[24] == 2u) &&
+        state[5] != state[28])
+    {
+        state[24] = 0u;
+        return;
+    }
+    PLUGIN_coin_QueryHomeCatchup();
+}
+
+PLUGIN_CODE(coin) void PLUGIN_coin_ApplyHomeCatchup(
+    u8 *record, u32 *wallet, u16 *nativeWallet, u16 *earned)
+{
+    volatile u32 *state = PLUGIN_coin_HomeHandoff();
+    if (state[24] != 2u || !record || !wallet || !nativeWallet || !earned ||
+        (state[12] != state[34] && state[11] != state[28]) ||
+        *(u32 *)(record + 16) != state[28] ||
+        *wallet > 30000u)
+        return;
+
+    state[34] = state[12];
+    state[36] = *wallet;
+    state[37] = *earned;
+    state[38] = *nativeWallet;
+    state[39] = (u32)wallet;
+    state[40] = (u32)nativeWallet;
+    state[41] = (u32)earned;
+    state[35] = (u32)record;
+    u32 room = 30000u - *wallet;
+    u32 credited = state[32] < room ? state[32] : room;
+    state[33] = credited;
+    *wallet += credited;
+    *earned = (u16)(*earned + state[31]);
+    *nativeWallet = (u16)(*wallet > 300u ? 300u : *wallet);
+    *(u16 *)(record + 4) = *nativeWallet;
+    __dmb();
+    state[24] = 3u;
+}
+
+PLUGIN_CODE(coin) void PLUGIN_coin_FinishHomeCatchupSave(u8 *record, Result result)
+{
+    volatile u32 *state = PLUGIN_coin_HomeHandoff();
+    if (state[24] != 3u || state[35] != (u32)record)
+        return;
+
+    if (R_FAILED(result))
+    {
+        *(u32 *)state[39] = state[36];
+        *(u16 *)state[40] = (u16)state[38];
+        *(u16 *)state[41] = (u16)state[37];
+        *(u16 *)(record + 4) = (u16)state[38];
+        state[33] = 0;
+        __dmb();
+        state[24] = 2u;
+        return;
+    }
+
+    if (state[12] == state[34] + 1u && state[11] == state[28])
+    {
+        __dmb();
+        state[24] = 4u;
+    }
 }
 
 PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
@@ -744,7 +1115,9 @@ PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
     if (SYSPLUGIN_MENU_API_LOADER_REVISION(menuApiVersion) < SYSPLUGIN_MENU_LOADER_API_REVISION ||
         SYSPLUGIN_MENU_API_PUBLIC_REVISION(menuApiVersion) < SYSPLUGIN_MENU_PUBLIC_API_REVISION ||
         !COIN_MENU__RegisterTitlePatch || !COIN_MENU__UnregisterTitlePatch ||
-        !COIN_MENU__RegisterHomePatch || !COIN_MENU__UnregisterHomePatch)
+        !COIN_MENU__RegisterHomePatch || !COIN_MENU__UnregisterHomePatch ||
+        !COIN_MENU__MapPage || !COIN_MENU__UnmapPage ||
+        !COIN_MENU__TempAlloc || !COIN_MENU__TempFree)
     {
         return false;
     }
@@ -754,6 +1127,13 @@ PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
 
     if (!COIN_MENU__RegisterTitlePatch(&g_coinNewsListPatch))
     {
+        (void)COIN_MENU__UnregisterHomePatch(&g_coinHomePatch);
+        return false;
+    }
+
+    if (!COIN_MENU__RegisterTitlePatch(&g_coinSettingsPatch))
+    {
+        (void)COIN_MENU__UnregisterTitlePatch(&g_coinNewsListPatch);
         (void)COIN_MENU__UnregisterHomePatch(&g_coinHomePatch);
         return false;
     }

@@ -1436,6 +1436,8 @@ build_module_elf() {
         marker_make_override+=("MAKE=make --old-file=${marker_plugin_path}")
     fi
 
+    python3 "${ROOT_DIR}/sysplugin/source_hashes.py" check "${ROOT_DIR}/sysmodules/${module_name}" "$ROOT_DIR"
+
     make -C "./sysmodules/${module_name}" elf "${marker_make_override[@]}" \
         NEXUS_VERSION_MAJOR="$NEXUS_VERSION_MAJOR" \
         NEXUS_VERSION_MINOR="$NEXUS_VERSION_MINOR" \
@@ -1443,6 +1445,8 @@ build_module_elf() {
         LUMA_VERSION_MAJOR="$LUMA_VERSION_MAJOR" \
         LUMA_VERSION_MINOR="$LUMA_VERSION_MINOR" \
         LUMA_VERSION_BUILD="$LUMA_VERSION_BUILD"
+
+    python3 "${ROOT_DIR}/sysplugin/source_hashes.py" commit "${ROOT_DIR}/sysmodules/${module_name}" "$ROOT_DIR"
 }
 
 OUTPUT_STAGE="$(mktemp -d "${ROOT_DIR}/.3nx-stage.XXXXXX")"

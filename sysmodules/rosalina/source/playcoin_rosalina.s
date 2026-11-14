@@ -2,7 +2,7 @@
 .balign 4
 .arm
 
-@ --------------- home menu stuff ---------------
+@ --------------- HOME Menu stuff ---------------
 
 .balign 4
 .global g_coinDat
@@ -38,6 +38,8 @@ g_coinProgressiveEarnedThisCalc:
     .word 0 @ progressive earned this calc
 
 .global g_coinProgressiveToday
+.global g_coinProgressiveState
+g_coinProgressiveState:
 g_coinProgressiveToday:
     .word 0
     .word 0 @ progressive step remainder

@@ -554,7 +554,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_RecordAchievementEarned(u32 achievem
 
     if (fileSize < COIN_FILE_NO_ACHIEVEMENT_SIZE)
     {
-        // The regular saver owns the fixed accounting block at 0x40.
+        // the regular saver owns the fixed accounting block at 0x40.
         rc = (Result)-28;
         goto cleanup_file;
     }
@@ -987,7 +987,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_SendDiagnosticNotification(
     hdr.unread = true;
     hdr.enableJPEG = true;
     hdr.processID = g_coinAchievementProcessIds[achievement->difficulty];
-    // NEWS epoch starts in 2000, osGetTime starts in 1900
+    // NEWS epoch starts in 2000, osgettime starts in 1900
     u64 now = COIN_HOST__osGetTime();
     hdr.time = now >= COIN_NEWS_EPOCH_OFFSET_MS ? now - COIN_NEWS_EPOCH_OFFSET_MS : 0;
 
@@ -1536,7 +1536,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_AchievementNewsMatches(
     if (!header || !achievement || achievement->difficulty > 3u)
         return false;
 
-    // exact title + Coin pid catches current and old Coin notifications
+    // exact title + coin PID catches current and old coin notifications
     if ((u32)header->processID != COIN_PLUGIN_ID)
         return false;
 
@@ -1726,6 +1726,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_TriggerAchievementImpl(u32 achieveme
     Result rc = PLUGIN_coin_EnsurePackedAssets();
     if (R_FAILED(rc))
         return rc;
+    g_coinAssetsReady = true;
 
     // only decode the record being queued
     CoinAchievement achievement;
@@ -1750,7 +1751,7 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_TriggerAchievementImpl(u32 achieveme
     g_coinPendingAchievementMask |= bit;
     g_coinHardDiagState = COIN_DIAG_WAIT_TRIGGER;
 
-    // add the temp callback once, otherwise just rearm it
+    // add the temp callback once, else just rearm it
     if (!COIN_BLUR__AddTickFunc(PLUGIN_coin_HardNotificationTick, COIN_NOTIFICATION_TICK_NS))
     {
         g_coinPendingAchievementMask &= ~bit;

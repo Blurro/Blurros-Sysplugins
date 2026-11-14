@@ -283,7 +283,7 @@ PLUGIN_CODE(blur) static bool PLUGIN_blur_CloseSleepIo(void)
     g_blurSleepCycleCounter++;
     PLUGIN_blur_UnlockSleepIo();
 
-    // normal saves finish here; a stuck task makes PTM deny this sleep instead
+    // normal saves finish here, stuck io makes ptm deny sleep
     for (u32 waits = 0; waits < 250u; waits++)
     {
         PLUGIN_blur_LockSleepIo();

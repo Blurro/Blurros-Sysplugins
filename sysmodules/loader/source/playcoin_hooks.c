@@ -10,11 +10,13 @@
 #define PLUGIN_RODATA(id) __attribute__((section(".pluginrodata_" #id), used))
 #define PLUGIN_DATA(id)   __attribute__((section(".plugindata_" #id), used))
 
-#define COIN_SCRATCH_LOW  0x10000000u
-#define COIN_SCRATCH_HIGH 0x1F000000u
 #define NOP 0xE1A00000u
 
 extern void *pluginTable_coin[];
+#define COIN_MENU__MapPage ((bool(*)(Handle,u32,u32*,u32*))pluginTable_coin[12])
+#define COIN_MENU__UnmapPage ((void(*)(u32))pluginTable_coin[13])
+#define COIN_MENU__TempAlloc ((bool(*)(u32,u32*))pluginTable_coin[14])
+#define COIN_MENU__TempFree ((void(*)(u32,u32))pluginTable_coin[15])
 #define COIN_HOST__FSUSER_OpenArchive       ((Result(*)(FS_Archive*,FS_ArchiveID,FS_Path))pluginTable_coin[0])
 #define COIN_HOST__FSUSER_CloseArchive      ((Result(*)(FS_Archive))pluginTable_coin[1])
 #define COIN_HOST__FSUSER_OpenFile          ((Result(*)(Handle*,FS_Archive,FS_Path,u32,u32))pluginTable_coin[2])
@@ -37,10 +39,14 @@ extern u16 PLUGIN_coin_dat;
 extern u32 PLUGIN_coin_bin[4];
 extern u16 PLUGIN_coin_change[4];
 extern u32 PLUGIN_coin_homePtr;
+extern u32 PLUGIN_coin_homePtmHistoryFunction;
 extern u32 PLUGIN_coin_handoffControl;
 extern u32 PLUGIN_coin_accountingLoadTarget;
 extern u32 PLUGIN_coin_accountingLoadPrologue2;
 extern u32 PLUGIN_coin_accountingSaveTarget;
+extern u32 PLUGIN_coin_settingsSaveTarget;
+extern u32 PLUGIN_coin_settingsSaveReturn;
+extern void PLUGIN_coin_settingsSaveHook(void);
 extern void PLUGIN_coin_accountingLoadHook(void);
 extern void PLUGIN_coin_accountingSaveHook(void);
 extern u32 PLUGIN_coin_homeUIReturn;
@@ -60,17 +66,6 @@ extern u32 PLUGIN_coin_homeNewsIconResumeWord;
 
 PLUGIN_DATA(coin) static u32 g_coinNewslistIconBase;
 
-extern Result PLUGIN_coin_svcQueryMemory(MemInfo *memInfo, PageInfo *pageInfo, u32 addr);
-extern Result PLUGIN_coin_svcMapProcessMemoryEx(
-    Handle dstProcess,
-    u32 dstAddr,
-    Handle srcProcess,
-    u32 srcAddr,
-    u32 size,
-    u32 flags
-);
-extern Result PLUGIN_coin_svcUnmapProcessMemoryEx(Handle process, u32 addr, u32 size);
-extern Result PLUGIN_coin_svcControlMemoryUnsafe(u32 *out, u32 addr, u32 size, MemOp op, MemPerm perm);
 extern u32 PLUGIN_coin_svcConvertVAToPA(const void *va, bool writeCheck);
 extern void PLUGIN_coin_svcFlushEntireDataCache(void);
 extern void PLUGIN_coin_svcInvalidateEntireInstructionCache(void);
@@ -89,11 +84,11 @@ __asm__(
     "PLUGIN_coin_homeNewsCoinHighBaseWord:\n"
     ".word 0x00040030\n"
 
-    // replay bits are Nintendo HOME Menu code; MatchHomeNewsIconCall checks them
+    // replay Nintendo HOME code, MatchHomeNewsIconCall checks it
     ".global PLUGIN_coin_HomeNewsIconHook\n"
     ".type PLUGIN_coin_HomeNewsIconHook, %function\n"
     "PLUGIN_coin_HomeNewsIconHook:\n"
-    // Home Menu uses the same notification icon ABI as the NewsList applet
+    // HOME Menu uses the same notification icon ABI as the NewsList applet
     "push {r0, r2}\n"
     "ldr r12, [r1]\n"
     "adr lr, PLUGIN_coin_homeNewsCoinLowWord\n"
@@ -110,7 +105,7 @@ __asm__(
     "mov r0, #0x1200\n"
     "cmp r2, r0\n"
     "blo 2f\n"
-    // Home Menu uses one baked icon for every Coin PID
+    // HOME Menu uses one baked icon for every coin PID
     "adr r1, PLUGIN_coin_homeNewsIcon\n"
     "mov r2, #0x1200\n"
     "mov lr, r2\n"
@@ -125,13 +120,13 @@ __asm__(
     "add sp, sp, #8\n"
     "b 3f\n"
     "2:\n"
-    // non-Coin stuff stays on Nintendo's resolver
+    // non-coin stuff stays on Nintendo's resolver
     "pop {r0, r2}\n"
     "adr r12, PLUGIN_coin_homeNewsIconOriginalWord\n"
     "ldr r12, [r12]\n"
     "blx r12\n"
     "3:\n"
-    // replay Nintendo HOME Menu's mov, then go back after its BL/MOV
+    // replay Nintendo HOME Menu's MOV, then go back after its BL/MOV
     "mov r0, #0x40\n"
     "adr r12, PLUGIN_coin_homeNewsIconResumeWord\n"
     "ldr pc, [r12]\n"
@@ -139,7 +134,7 @@ __asm__(
     ".balign 4\n"
     ".global PLUGIN_coin_homeNewsIcon\n"
     "PLUGIN_coin_homeNewsIcon:\n"
-    // baked 48x48 Coin icon
+    // baked 48x48 coin icon
     ".include \"../../../coin_home_icon.inc\"\n"
     ".global PLUGIN_coin_homeNewsIconEnd\n"
     "PLUGIN_coin_homeNewsIconEnd:\n"
@@ -183,7 +178,7 @@ __asm__(
     "PLUGIN_coin_newslistIconResumeWord:\n"
     ".word 0\n"
 
-    // same for Nintendo NewsList; MatchNewslistIconCall checks that call site
+    // same for Nintendo NewsList, MatchNewslistIconCall checks the call
     ".global PLUGIN_coin_NewslistIconHook\n"
     ".type PLUGIN_coin_NewslistIconHook, %function\n"
     "PLUGIN_coin_NewslistIconHook:\n"
@@ -201,7 +196,7 @@ __asm__(
     "blx r12\n"
     "mrs r9, cpsr\n"           // keep Nintendo's flags for the return
 
-    // reuse this slot for C's fifth arg, keeping sp aligned
+    // reuse this slot for c's fifth arg, keeping sp aligned
     "mov r0, r4\n"
     "mov r1, r5\n"
     "mov r2, r6\n"
@@ -215,29 +210,12 @@ __asm__(
     "add sp, sp, #8\n"
     "msr cpsr_f, r9\n"
     "pop {r4-r9}\n"
-    // replay Nintendo NewsList's mov, then go back after its BL/MOV
+    // replay Nintendo NewsList's MOV, then go back after its BL/MOV
     "mov r0, #0x40\n"
     "adr r12, PLUGIN_coin_newslistIconResumeWord\n"
     "ldr pc, [r12]\n"
 
-    // QueryMemory / SendSyncRequest stubs from devkitPro/libctru, libctru/source/svc.s
-    ".global PLUGIN_coin_svcQueryMemory\n"
-    ".type PLUGIN_coin_svcQueryMemory, %function\n"
-    "PLUGIN_coin_svcQueryMemory:\n"
-    "push {r0, r1, r4, r5, r6}\n"
-    "svc 0x02\n"
-    "ldr r6, [sp]\n"
-    "str r1, [r6]\n"
-    "str r2, [r6, #4]\n"
-    "str r3, [r6, #8]\n"
-    "str r4, [r6, #12]\n"
-    "ldr r6, [sp, #4]\n"
-    "str r5, [r6]\n"
-    "add sp, sp, #8\n"
-    "pop {r4, r5, r6}\n"
-    "bx lr\n"
-
-    // custom svc stubs from Nexus3DS/Luma3DS, rosalina/source/csvc.s
+    // custom SVC stubs from Nexus3DS/Luma3DS, Rosalina/source/csvc.s
     ".global PLUGIN_coin_svcConvertVAToPA\n"
     ".type PLUGIN_coin_svcConvertVAToPA, %function\n"
     "PLUGIN_coin_svcConvertVAToPA:\n"
@@ -254,33 +232,6 @@ __asm__(
     ".type PLUGIN_coin_svcInvalidateEntireInstructionCache, %function\n"
     "PLUGIN_coin_svcInvalidateEntireInstructionCache:\n"
     "svc 0x94\n"
-    "bx lr\n"
-
-    ".global PLUGIN_coin_svcMapProcessMemoryEx\n"
-    ".type PLUGIN_coin_svcMapProcessMemoryEx, %function\n"
-    "PLUGIN_coin_svcMapProcessMemoryEx:\n"
-    "push {r4, r5, r6}\n"
-    "ldr r4, [sp, #12]\n"
-    "ldr r5, [sp, #16]\n"
-    "mov r6, r0\n"
-    "mov r0, #0xFFFFFFF2\n"
-    "svc 0xA0\n"
-    "pop {r4, r5, r6}\n"
-    "bx lr\n"
-
-    ".global PLUGIN_coin_svcUnmapProcessMemoryEx\n"
-    ".type PLUGIN_coin_svcUnmapProcessMemoryEx, %function\n"
-    "PLUGIN_coin_svcUnmapProcessMemoryEx:\n"
-    "svc 0xA1\n"
-    "bx lr\n"
-
-    ".global PLUGIN_coin_svcControlMemoryUnsafe\n"
-    ".type PLUGIN_coin_svcControlMemoryUnsafe, %function\n"
-    "PLUGIN_coin_svcControlMemoryUnsafe:\n"
-    "str r4, [sp, #-4]!\n"
-    "ldr r4, [sp, #4]\n"
-    "svc 0xA3\n"
-    "ldr r4, [sp], #4\n"
     "bx lr\n"
 
     ".global PLUGIN_coin_svcSendSyncRequest\n"
@@ -313,154 +264,6 @@ PLUGIN_CODE(coin) static u32 PLUGIN_coin_Phys(const void *ptr)
     return PLUGIN_coin_svcConvertVAToPA(ptr, false) | 0x80000000u;
 }
 
-PLUGIN_CODE(coin) static bool PLUGIN_coin_FindFreeRange(u32 size, u32 *out)
-{
-    MemInfo memInfo;
-    PageInfo pageInfo;
-    u32 scan = COIN_SCRATCH_LOW;
-
-    if (!out || !size || (size & 0xFFFu))
-        return false;
-
-    while (scan < COIN_SCRATCH_HIGH)
-    {
-        if (R_FAILED(PLUGIN_coin_svcQueryMemory(&memInfo, &pageInfo, scan)))
-            return false;
-
-        u32 end = memInfo.base_addr + memInfo.size;
-        if (end <= scan)
-            return false;
-
-        if (memInfo.state == MEMSTATE_FREE)
-        {
-            u32 base = (memInfo.base_addr + 0xFFFu) & ~0xFFFu;
-            if (base < COIN_SCRATCH_LOW)
-                base = COIN_SCRATCH_LOW;
-
-            if (base < end && size <= end - base && size <= COIN_SCRATCH_HIGH - base)
-            {
-                *out = base;
-                return true;
-            }
-        }
-
-        scan = end;
-    }
-
-    return false;
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_AllocAliasGuard(u32 address)
-{
-    u32 allocated = 0;
-    Result result = PLUGIN_coin_svcControlMemoryUnsafe(
-        &allocated,
-        address,
-        0x1000u,
-        MEMOP_ALLOC | MEMOP_REGION_SYSTEM,
-        MEMPERM_READWRITE
-    );
-    return R_SUCCEEDED(result) && allocated == address;
-}
-
-PLUGIN_CODE(coin) static void PLUGIN_coin_FreeAliasGuard(u32 address)
-{
-    u32 out;
-    (void)PLUGIN_coin_svcControlMemoryUnsafe(
-        &out,
-        address,
-        0x1000u,
-        MEMOP_FREE | MEMOP_REGION_SYSTEM,
-        MEMPERM_DONTCARE
-    );
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_MapGuardedRange(
-    Handle sourceProcess,
-    u32 sourcePage,
-    u32 size,
-    u32 *mapBase
-)
-{
-    u32 guardBase;
-    u32 aliasBase;
-    u32 rightGuard;
-    u32 scanSize;
-
-    if (!mapBase || !size || (sourcePage & 0xFFFu) || (size & 0xFFFu) ||
-        size > 0xFFFFDFFFu)
-    {
-        return false;
-    }
-
-    scanSize = size + 0x2000u;
-    if (!PLUGIN_coin_FindFreeRange(scanSize, &guardBase))
-        return false;
-
-    aliasBase = guardBase + 0x1000u;
-    rightGuard = aliasBase + size;
-
-    if (!PLUGIN_coin_AllocAliasGuard(guardBase))
-        return false;
-
-    if (!PLUGIN_coin_AllocAliasGuard(rightGuard))
-    {
-        PLUGIN_coin_FreeAliasGuard(guardBase);
-        return false;
-    }
-
-    if (R_FAILED(PLUGIN_coin_svcMapProcessMemoryEx(
-            CUR_PROCESS_HANDLE,
-            aliasBase,
-            sourceProcess,
-            sourcePage,
-            size,
-            0)))
-    {
-        PLUGIN_coin_FreeAliasGuard(rightGuard);
-        PLUGIN_coin_FreeAliasGuard(guardBase);
-        return false;
-    }
-
-    *mapBase = aliasBase;
-    return true;
-}
-
-PLUGIN_CODE(coin) static void PLUGIN_coin_UnmapGuardedRange(u32 mapBase, u32 size)
-{
-    if (!mapBase || !size || (size & 0xFFFu))
-        return;
-
-    if (R_SUCCEEDED(PLUGIN_coin_svcUnmapProcessMemoryEx(
-            CUR_PROCESS_HANDLE,
-            mapBase,
-            size)))
-    {
-        PLUGIN_coin_FreeAliasGuard(mapBase - 0x1000u);
-        PLUGIN_coin_FreeAliasGuard(mapBase + size);
-    }
-}
-
-PLUGIN_CODE(coin) static bool PLUGIN_coin_MapOwnPage(u32 source, u32 *mapBase, u32 *mapped)
-{
-    if (!mapped || !PLUGIN_coin_MapGuardedRange(
-            CUR_PROCESS_HANDLE,
-            source & ~0xFFFu,
-            0x1000u,
-            mapBase))
-    {
-        return false;
-    }
-
-    *mapped = *mapBase + (source & 0xFFFu);
-    return true;
-}
-
-PLUGIN_CODE(coin) static void PLUGIN_coin_UnmapOwnPage(u32 mapBase)
-{
-    PLUGIN_coin_UnmapGuardedRange(mapBase, 0x1000u);
-}
-
 PLUGIN_CODE(coin) static void PLUGIN_coin_PatchWords(
     u8 *code,
     u32 address,
@@ -477,12 +280,12 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_WriteOwnCodeWord(u32 address, u32 valu
 {
     u32 mapBase = 0;
     u32 mapped = 0;
-    if (!PLUGIN_coin_MapOwnPage(address, &mapBase, &mapped))
+    if (!COIN_MENU__MapPage(CUR_PROCESS_HANDLE, address, &mapBase, &mapped))
         return false;
 
     *(u32*)mapped = value;
     PLUGIN_coin_svcFlushEntireDataCache();
-    PLUGIN_coin_UnmapOwnPage(mapBase);
+    COIN_MENU__UnmapPage(mapBase);
     return true;
 }
 
@@ -593,7 +396,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     u32 mainEndOffset = textSize - 0x100u;
     u32 scanEndOffset = textSize - 9u * sizeof(u32);
 
-    // one scan finds every Home Menu site we need
+    // one scan finds every HOME Menu site we need
     for (u32 offset = 0; offset <= scanEndOffset; offset += sizeof(u32))
     {
         u32 *scan = (u32*)(code + offset);
@@ -689,8 +492,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
         loadTarget != coinCalcOffset + 0x364u ||
         saveTarget != coinCalcOffset + 0x4D0u ||
         ((u32*)(code + loadTarget - 0x100000u))[0] != 0xE92D43F8u ||
-        // The second load instruction copies the file object to r4.
-        // Verify it before replaying it in the trampoline.
+        // check the second load copies the file object to r4 before replaying it
         ((u32*)(code + loadTarget - 0x100000u))[1] != 0xE1A04000u ||
         ((u32*)(code + saveTarget - 0x100000u))[0] != 0xE92D40F0u ||
         ((u32*)(code + saveTarget - 0x100000u))[1] != 0xE24DD00Cu)
@@ -720,6 +522,61 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
         }
     }
 
+    u32 ptmWrapper1 = 0;
+    u32 ptmWrapper2 = 0;
+    if (coinCalc[0x84u / 4u] != 0xE1A03008u ||
+        coinCalc[0x88u / 4u] != 0xE5840008u ||
+        coinCalc[0x8Cu / 4u] != 0xE3A01018u ||
+        coinCalc[0x90u / 4u] != 0xE28D0040u ||
+        coinCalc[0xF4u / 4u] != 0xE1A03006u ||
+        coinCalc[0xF8u / 4u] != 0xE1A02005u ||
+        coinCalc[0xFCu / 4u] != 0xE3A01018u ||
+        coinCalc[0x100u / 4u] != 0xE28D0040u ||
+        !PLUGIN_coin_DecodeArmBlTarget(coinCalcOffset + 0x94u,
+            coinCalc[0x94u / 4u], &ptmWrapper1) ||
+        !PLUGIN_coin_DecodeArmBlTarget(coinCalcOffset + 0x104u,
+            coinCalc[0x104u / 4u], &ptmWrapper2) ||
+        ptmWrapper1 != ptmWrapper2 || ptmWrapper1 < 0x100000u)
+    {
+        PLUGIN_coin_ClearTransientHomePointer();
+        return;
+    }
+    u32 wrapperRaw = ptmWrapper1 - 0x100000u;
+    if (wrapperRaw > textSize || textSize - wrapperRaw < 7u * sizeof(u32))
+    {
+        PLUGIN_coin_ClearTransientHomePointer();
+        return;
+    }
+    u32 *wrapper = (u32 *)(code + wrapperRaw);
+    u32 ptmRequest = 0;
+    if (wrapper[0] != 0xE92D4010u ||
+        wrapper[2] != 0xE1B00FA0u || wrapper[3] != 0x0A000001u ||
+        wrapper[4] != 0xE8BD4010u ||
+        (wrapper[5] & 0xFF000000u) != 0xEA000000u ||
+        wrapper[6] != 0xE8BD8010u ||
+        !PLUGIN_coin_DecodeArmBlTarget(ptmWrapper1 + 4u,
+            wrapper[1], &ptmRequest) || ptmRequest < 0x100000u)
+    {
+        PLUGIN_coin_ClearTransientHomePointer();
+        return;
+    }
+    u32 requestRaw = ptmRequest - 0x100000u;
+    if (requestRaw > textSize || textSize - requestRaw < 9u * sizeof(u32))
+    {
+        PLUGIN_coin_ClearTransientHomePointer();
+        return;
+    }
+    u32 *request = (u32 *)(code + requestRaw);
+    if (request[0] != 0xE92D4010u || request[1] != 0xEE1D4F70u ||
+        request[2] != 0xE59FC034u || request[3] != 0xE5A4C080u ||
+        request[4] != 0xE284E004u || request[5] != 0xE88E000Eu ||
+        request[6] != 0xE3A0200Cu || request[7] != 0xE5840014u ||
+        request[8] != 0xE59F0020u)
+    {
+        PLUGIN_coin_ClearTransientHomePointer();
+        return;
+    }
+
     // modern EUR/USA match this, old 7.x just has no site
     if (achievementsEnabled && !newsDuplicate && newsCallAddress)
         (void)PLUGIN_coin_PatchHomeNewsIcon(code, newsCallAddress, newsOriginalTarget);
@@ -736,7 +593,9 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
 
     u32 homePointer = coinCalcOffset + 0x3Cu;
     if (!PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_homeUIReturn, coinUIOffset + 0x10u) ||
-        !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_homePtr, homePointer))
+        !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_homePtr, homePointer) ||
+        !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_homePtmHistoryFunction,
+            ptmRequest))
     {
         PLUGIN_coin_ClearTransientHomePointer();
         return;
@@ -744,7 +603,10 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
 
     u32 stateMapBase;
     u32 stateMapped;
-    if (!PLUGIN_coin_MapOwnPage((u32)&PLUGIN_coin_dat, &stateMapBase, &stateMapped))
+    if (((u32)&PLUGIN_coin_dat & ~0xFFFu) !=
+            (((u32)&PLUGIN_coin_handoffControl + 167u) & ~0xFFFu) ||
+        !COIN_MENU__MapPage(CUR_PROCESS_HANDLE, (u32)&PLUGIN_coin_dat,
+            &stateMapBase, &stateMapped))
     {
         PLUGIN_coin_ClearTransientHomePointer();
         return;
@@ -763,12 +625,12 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     mappedHandoffControl[4] = 0;
     mappedHandoffControl[5] = 0;
     mappedHandoffControl[6] = 0;
-    for (u32 i = 7; i < 13u; i++)
-        mappedHandoffControl[i] = 0;
+    for (u32 i = 7; i < 42u; i++)
+        ((volatile u32*)mappedHandoffControl)[i] = 0; // keep mapped stores inline
     if (!PLUGIN_coin_InitializeHomeMenuState(mappedDat, mappedBin,
             mappedChange, homePointer, &mappedHandoffControl[7]))
     {
-        PLUGIN_coin_UnmapOwnPage(stateMapBase);
+        COIN_MENU__UnmapPage(stateMapBase);
         PLUGIN_coin_ClearTransientHomePointer();
         return;
     }
@@ -779,13 +641,12 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
             ((u32*)(code + loadTarget - 0x100000u))[1]) ||
         !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_accountingSaveTarget, saveTarget + 8u))
     {
-        PLUGIN_coin_UnmapOwnPage(stateMapBase);
+        COIN_MENU__UnmapPage(stateMapBase);
         PLUGIN_coin_ClearTransientHomePointer();
         return;
     }
 
-    // Patch the shared load AND save helper entries, not individual
-    // callers: fallback/init and normal transactions must share one view.
+    // hook both shared load/save helpers so init and regular saves see the same state
     u32 accountingPatch[2] = {0xE51FF004u, PLUGIN_coin_Phys(PLUGIN_coin_accountingLoadHook)};
     PLUGIN_coin_PatchWords(code, loadTarget, accountingPatch, 2);
     accountingPatch[1] = PLUGIN_coin_Phys(PLUGIN_coin_accountingSaveHook);
@@ -839,7 +700,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     }
 
     PLUGIN_coin_svcFlushEntireDataCache();
-    PLUGIN_coin_UnmapOwnPage(stateMapBase);
+    COIN_MENU__UnmapPage(stateMapBase);
 }
 
 PLUGIN_RODATA(coin) static const char g_coinNewslistIconPath[] = "/luma/coinachv/icn.bin";
@@ -861,6 +722,61 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_PrepareHomeMenu(
         return false;
 
     PLUGIN_coin_PatchHomeMenu(context->code, context->textSize);
+    return true;
+}
+
+PLUGIN_CODE(coin) bool PLUGIN_coin_PrepareSettings(PluginMenuLoaderContext *context)
+{
+    if (!context || !context->codeSet || !context->code ||
+        context->textSize < 128u ||
+        (context->codeSet->text_addr & 3u) != 0u ||
+        context->codeSet->text_addr + context->textSize < context->codeSet->text_addr ||
+        ((u32)&PLUGIN_coin_dat & ~0xFFFu) !=
+            (((u32)&PLUGIN_coin_handoffControl + 168u) & ~0xFFFu))
+        return false;
+
+    // Settings follows one load -> PTM checkpoint -> save path, with BL/CMP displaced
+    const u32 *text = (const u32*)context->code;
+    u32 textAddress = context->codeSet->text_addr;
+    u32 count = context->textSize / sizeof(u32);
+    u32 found = 0;
+    u32 saveTarget = 0;
+    for (u32 i = 25u; i + 5u < count; i++)
+    {
+        if (text[i] != 0xE28D101Cu || text[i + 1u] != 0xE1A0000Du ||
+            text[i + 3u] != 0xE3540000u || text[i + 4u] != 0x0A000006u ||
+            text[i - 24u] != 0xE92D4010u ||
+            text[i - 23u] != 0xE24DD030u ||
+            text[i - 3u] != 0xE1A04000u ||
+            text[i - 2u] != 0xE28D001Cu ||
+            (text[i - 1u] & 0xFF000000u) != 0xEB000000u)
+            continue;
+
+        u32 address = textAddress + i * sizeof(u32);
+        u32 target = 0;
+        if (!PLUGIN_coin_DecodeArmBlTarget(address + 8u, text[i + 2u], &target) ||
+            target < textAddress || target - textAddress >
+                context->textSize - 4u * sizeof(u32))
+            continue;
+
+        const u32 *save = text + (target - textAddress) / sizeof(u32);
+        if (save[0] != 0xE92D40F0u || save[1] != 0xE24DD00Cu ||
+            save[2] != 0xE3A06000u || save[3] != 0xE1A04000u)
+            continue;
+
+        if (found)
+            return false;
+        found = address + 8u;
+        saveTarget = target;
+    }
+    if (!found ||
+        !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_settingsSaveTarget, saveTarget) ||
+        !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_settingsSaveReturn, found + 8u))
+        return false;
+
+    u32 patch[2] = {0xE51FF004u, PLUGIN_coin_Phys(PLUGIN_coin_settingsSaveHook)};
+    PLUGIN_coin_PatchWords(context->code, found, patch, 2u);
+    PLUGIN_coin_svcFlushEntireDataCache();
     return true;
 }
 
@@ -1084,14 +1000,8 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_PrepareNewsList(
 PLUGIN_CODE(coin) static bool PLUGIN_coin_LoadNewslistIcons(Handle process, u32 iconBase)
 {
     u32 scratch = 0;
-    if (!PLUGIN_coin_MapGuardedRange(
-            process,
-            iconBase,
-            COIN_NEWSLIST_ICON_ALLOC_SIZE,
-            &scratch))
-    {
+    if (!COIN_MENU__TempAlloc(COIN_NEWSLIST_ICON_ALLOC_SIZE, &scratch))
         return false;
-    }
 
     bool ok = false;
     FS_Archive sd;
@@ -1120,7 +1030,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_LoadNewslistIcons(Handle process, u32 
             if (R_SUCCEEDED(rc) &&
                 read == (2u * sizeof(u32)) + COIN_NEWSLIST_ICON_PACK_SIZE)
             {
-                volatile u32 *assetHeader = (volatile u32*)scratch;
+                const u32 *assetHeader = (const u32*)scratch;
                 ok = assetHeader[0] == COIN_ASSET_VERSION_MAGIC;
             }
             COIN_HOST__FSFILE_Close(file);
@@ -1129,9 +1039,29 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_LoadNewslistIcons(Handle process, u32 
     }
 
     if (ok)
-        PLUGIN_coin_svcFlushEntireDataCache();
-
-    PLUGIN_coin_UnmapGuardedRange(scratch, COIN_NEWSLIST_ICON_ALLOC_SIZE);
+    {
+        u32 remaining = (2u * sizeof(u32)) + COIN_NEWSLIST_ICON_PACK_SIZE;
+        for (u32 page = 0; page < COIN_NEWSLIST_ICON_PAGES; page++)
+        {
+            u32 mapBase = 0;
+            u32 mapped = 0;
+            if (!COIN_MENU__MapPage(process, iconBase + page * 0x1000u,
+                    &mapBase, &mapped))
+            {
+                ok = false;
+                break;
+            }
+            u32 length = remaining < 0x1000u ? remaining : 0x1000u;
+            const u8 *source = (const u8*)scratch + page * 0x1000u;
+            volatile u8 *target = (volatile u8*)mapped;
+            for (u32 i = 0; i < length; i++)
+                target[i] = source[i];
+            PLUGIN_coin_svcFlushEntireDataCache();
+            COIN_MENU__UnmapPage(mapBase);
+            remaining -= length;
+        }
+    }
+    COIN_MENU__TempFree(scratch, COIN_NEWSLIST_ICON_ALLOC_SIZE);
     return ok;
 }
 
