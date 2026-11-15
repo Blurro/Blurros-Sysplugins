@@ -457,6 +457,11 @@ rtcForwardFloorReady:
     ldr     r1, [r0, #20]
     str     r1, [r0, #16]
     ldrh    r1, [r4, #6]
+    adr     r2, PLUGIN_coin_homePtr
+    ldr     r2, [r2]
+    ldr     r2, [r2, #8]
+    ldrh    r2, [r2]             @ earned counter before HOME's new-day calc
+    orr     r1, r1, r2, lsl #16
     str     r1, [r0, #24]
     adr     r2, PLUGIN_coin_homePtr
     ldr     r2, [r2]
