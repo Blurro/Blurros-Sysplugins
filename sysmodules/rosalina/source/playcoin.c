@@ -1028,6 +1028,15 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     bool newCatchup = hasCatchup &&
         g_coinCatchupAppliedGeneration != catchup[4];
     u32 previousDayShadow = 0;
+    u32 savedDay = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] &
+        COIN_EXT_DAY_VALUE_MASK;
+    if (savedDay && currentDay == savedDay + 1u &&
+        !(rtcDecisionValid || newCatchup))
+    {
+        // keep today's earnings pending until HOME confirms the rollover
+        (void)PLUGIN_coin_UnlockHomeState(homeProcess);
+        return;
+    }
     if (newCatchup)
     {
         u32 oldDay = PLUGIN_coin_SettingsDayOrdinal(catchup[0]);
@@ -1687,9 +1696,18 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_MaintainNativeSentinel(u32 day, u32 st
     }
 
     bool rebase = R_SUCCEEDED(rc) && record[4] != stamp;
+    bool deferredRebase = false;
     if (rebase)
     {
-        if (!PLUGIN_coin_ReadNativeStepSnapshot(&record[2], &record[3]))
+        u32 privateDay = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] &
+            COIN_EXT_DAY_VALUE_MASK;
+        if (privateDay != day)
+        {
+            // leave HOME's old date alone until the private rollover settles
+            rebase = false;
+            deferredRebase = true;
+        }
+        else if (!PLUGIN_coin_ReadNativeStepSnapshot(&record[2], &record[3]))
             rc = (Result)-1;
         else
             record[4] = stamp;
@@ -1728,7 +1746,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_MaintainNativeSentinel(u32 day, u32 st
         rc = archiveRc;
     if (!PLUGIN_coin_UnlockHomeState(homeProcess))
         rc = (Result)-1;
-    if (R_SUCCEEDED(rc))
+    if (R_SUCCEEDED(rc) && !deferredRebase)
         g_coinNativeSentinelDay = day;
 }
 
