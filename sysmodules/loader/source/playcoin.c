@@ -1101,6 +1101,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_FinishHomeCatchupSave(u8 *record, Result resu
 
     if (state[12] == state[34] + 1u && state[11] == state[28])
     {
+        // freeze the successful catch-up ID before later HOME saves
+        state[34] = state[12];
         __dmb();
         state[24] = 4u;
     }
