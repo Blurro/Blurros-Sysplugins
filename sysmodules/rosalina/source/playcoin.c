@@ -599,7 +599,7 @@ extern bool PLUGIN_coin_UnlockHomeState(Handle processHandle);
 extern bool PLUGIN_coin_CopyHomeAccounting(u32 out[5], u32 *generation);
 extern bool PLUGIN_coin_HomeAccountingChanged(u32 savedGeneration);
 extern u32 PLUGIN_coin_HomeCatchupState(void);
-extern bool PLUGIN_coin_CopyHomeCatchup(u32 out[5]);
+extern bool PLUGIN_coin_CopyHomeCatchup(u32 out[6]);
 extern void PLUGIN_coin_AcknowledgeHomeCatchup(u32 generation);
 extern bool PLUGIN_coin_SetHomeFlatMode(bool flat);
 extern void PLUGIN_coin_PublishSavedExtension(u32 generation, u32 todayWord,
@@ -614,6 +614,7 @@ extern bool PLUGIN_coin_RtcDayDecisionPending(void);
 extern bool PLUGIN_coin_RtcExactNextDayPending(void);
 extern u32 PLUGIN_coin_RtcPreviousProgressiveRemainder(void);
 extern u32 PLUGIN_coin_RtcPreviousCoinsToday(void);
+extern u32 PLUGIN_coin_RtcPreviousEarnedCounter(void);
 extern u32 PLUGIN_coin_RtcDecisionCalendarStamp(void);
 extern u32 PLUGIN_coin_RtcObservedCalendarStamp(void);
 extern void PLUGIN_coin_ConsumeRtcDayDecision(void);
@@ -981,7 +982,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
         (void)PLUGIN_coin_UnlockHomeState(homeProcess);
         return;
     }
-    u32 catchup[5];
+    u32 catchup[6];
     bool hasCatchup = PLUGIN_coin_CopyHomeCatchup(catchup);
     if (catchupState == 4u && !hasCatchup)
     {
@@ -1028,14 +1029,31 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     bool newCatchup = hasCatchup &&
         g_coinCatchupAppliedGeneration != catchup[4];
     u32 previousDayShadow = 0;
+    u32 previousDayCarry = 0;
     u32 savedDay = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] &
         COIN_EXT_DAY_VALUE_MASK;
-    if (savedDay && currentDay == savedDay + 1u &&
-        !(rtcDecisionValid || newCatchup))
+    bool exactRollover = rtcDecisionValid &&
+        rtcDecision == COIN_RTC_DAY_EXACT_NEXT;
+    bool nextDay = savedDay && currentDay == savedDay + 1u;
+    if (nextDay && !(exactRollover || newCatchup))
     {
-        // keep today's earnings pending until HOME confirms the rollover
+        // HOME hasn't classified the old-day earnings yet
         (void)PLUGIN_coin_UnlockHomeState(homeProcess);
         return;
+    }
+
+    if (newCatchup || (nextDay && exactRollover))
+    {
+        // snapshot splits earnings minted before and after HOME's RTC gate
+        u16 snapshot = newCatchup ? (u16)catchup[5] :
+            (u16)PLUGIN_coin_RtcPreviousEarnedCounter();
+        previousDayCarry = (u16)(snapshot - g_coinEarnedAppliedCounter);
+        if (previousDayCarry > PLUGIN_coin_PendingEarned())
+        {
+            g_coinSavePending = true;
+            (void)PLUGIN_coin_UnlockHomeState(homeProcess);
+            return;
+        }
     }
     if (newCatchup)
     {
@@ -1053,8 +1071,14 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
         }
 
         previousDayShadow = catchup[2];
+        if (previousDayShadow > PLUGIN_coin_PendingEarned() - previousDayCarry)
+        {
+            g_coinSavePending = true;
+            (void)PLUGIN_coin_UnlockHomeState(homeProcess);
+            return;
+        }
         u32 previousDayBucket = PLUGIN_coin_GetTodayWalked() +
-            previousDayShadow;
+            previousDayShadow + previousDayCarry;
         if (previousDayBucket > 0xFFFFu)
             previousDayBucket = 0xFFFFu;
         u32 completedWeek = previousDayBucket;
@@ -1074,7 +1098,26 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
         g_coinCatchupAppliedGeneration = catchup[4];
     }
 
-    g_coinDayTransitionAuthorized = rtcDecisionValid || newCatchup;
+    if (nextDay && exactRollover && !newCatchup)
+    {
+        u32 previousDayBucket = PLUGIN_coin_GetTodayWalked() +
+            previousDayCarry;
+        if (previousDayBucket > 0xFFFFu)
+            previousDayBucket = 0xFFFFu;
+        u32 completedWeek = previousDayBucket;
+        for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
+            completedWeek += PLUGIN_coin_GetHistoryDay(i);
+        g_coinCompletedDay = previousDayBucket;
+        g_coinCompletedWeek = completedWeek;
+        g_coinCompletedWalkPending = true;
+        if (previousDayCarry)
+        {
+            PLUGIN_coin_SetTodayWalked((u16)previousDayBucket);
+            g_coinExtendedDirty = true;
+        }
+    }
+
+    g_coinDayTransitionAuthorized = exactRollover || newCatchup;
     PLUGIN_coin_UpdateDayHistoryForDay(currentDay);
     g_coinDayTransitionAuthorized = false;
     if (rtcDecision != COIN_RTC_DAY_WAITING)
@@ -1083,7 +1126,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     u32 earnedBatch = PLUGIN_coin_TakeEarnedBatch();
     if (earnedBatch)
         g_coinEarnedEventPending = true;
-    u32 todayEarned = earnedBatch - previousDayShadow;
+    u32 todayEarned = earnedBatch - previousDayShadow - previousDayCarry;
 
     bool spentEvent = coinsEverSpent != g_lastEverSpent;
     bool milestoneEvent = g_coinMilestoneEvent;
