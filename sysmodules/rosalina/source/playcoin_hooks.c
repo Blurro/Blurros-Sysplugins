@@ -118,17 +118,18 @@ PLUGIN_CODE(coin) u32 PLUGIN_coin_HomeCatchupState(void)
     return g_coinHandoffControl ? g_coinHandoffControl[24] : 0u;
 }
 
-PLUGIN_CODE(coin) bool PLUGIN_coin_CopyHomeCatchup(u32 out[5])
+PLUGIN_CODE(coin) bool PLUGIN_coin_CopyHomeCatchup(u32 out[6])
 {
     if (!g_coinHandoffControl || !out || g_coinHandoffControl[24] != 4u ||
         g_coinHandoffControl[12] < g_coinHandoffControl[34] ||
-        g_coinHandoffControl[11] != g_coinHandoffControl[28])
+        !g_coinHandoffControl[28])
         return false;
     out[0] = g_coinHandoffControl[27];
     out[1] = g_coinHandoffControl[28];
     out[2] = g_coinHandoffControl[31];
     out[3] = g_coinHandoffControl[33];
     out[4] = g_coinHandoffControl[34];
+    out[5] = g_coinHandoffControl[30] >> 16;
     return true;
 }
 
@@ -370,7 +371,16 @@ PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcPreviousCoinsToday(void)
         return 0;
 
     __dmb();
-    return g_coinHandoffControl[6];
+    return (u16)g_coinHandoffControl[6];
+}
+
+PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcPreviousEarnedCounter(void)
+{
+    if (!g_coinHandoffControl || PLUGIN_coin_RtcDayDecision() != 1u)
+        return 0;
+
+    __dmb();
+    return (u16)(g_coinHandoffControl[6] >> 16);
 }
 
 PLUGIN_CODE(coin) u32 PLUGIN_coin_RtcDecisionCalendarStamp(void)
