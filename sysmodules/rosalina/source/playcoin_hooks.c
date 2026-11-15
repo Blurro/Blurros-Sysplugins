@@ -121,21 +121,21 @@ PLUGIN_CODE(coin) u32 PLUGIN_coin_HomeCatchupState(void)
 PLUGIN_CODE(coin) bool PLUGIN_coin_CopyHomeCatchup(u32 out[5])
 {
     if (!g_coinHandoffControl || !out || g_coinHandoffControl[24] != 4u ||
-        g_coinHandoffControl[12] != g_coinHandoffControl[34] + 1u ||
+        g_coinHandoffControl[12] < g_coinHandoffControl[34] ||
         g_coinHandoffControl[11] != g_coinHandoffControl[28])
         return false;
     out[0] = g_coinHandoffControl[27];
     out[1] = g_coinHandoffControl[28];
     out[2] = g_coinHandoffControl[31];
     out[3] = g_coinHandoffControl[33];
-    out[4] = g_coinHandoffControl[12];
+    out[4] = g_coinHandoffControl[34];
     return true;
 }
 
 PLUGIN_CODE(coin) void PLUGIN_coin_AcknowledgeHomeCatchup(u32 generation)
 {
     if (!g_coinHandoffControl || g_coinHandoffControl[24] != 4u ||
-        g_coinHandoffControl[12] != generation)
+        g_coinHandoffControl[34] != generation)
         return;
     g_coinHandoffControl[24] = 0u;
     __dmb();
