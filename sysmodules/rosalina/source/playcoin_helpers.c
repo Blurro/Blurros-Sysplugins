@@ -488,15 +488,10 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_DayHistoryNeedsUpdate(u32 currentDay)
     if (!currentDay || (savedDay && currentDay == savedDay))
         return false;
 
-    if (savedDay && (dayState & COIN_EXT_DAY_REBASE_PRESERVE) &&
-        currentDay > savedDay && currentDay - savedDay <= 300u)
-        return PLUGIN_coin_RtcDayDecisionPending();
-
-    if (savedDay && !(dayState & COIN_EXT_DAY_REBASE_PRESERVE) &&
-        savedDay != COIN_EXT_DAY_VALUE_MASK && currentDay == savedDay + 1u)
-    {
-        return PLUGIN_coin_RtcDayDecisionPending();
-    }
+    // keep checking a stale bucket day even before HOME publishes its decision
+    if (savedDay && currentDay > savedDay &&
+        currentDay - savedDay <= 300u)
+        return true;
 
     return true;
 }
