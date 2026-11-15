@@ -977,7 +977,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_QueryHomeCatchup(void)
     }
 
     u32 steps = total - boundary;
-    u32 oldToday = state[30];
+    u32 oldToday = (u16)state[30];
     u32 shadow = 0;
     while (oldToday + shadow < 0xFFFFu)
     {
@@ -1033,7 +1033,8 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PrepareHomeCatchup(
     state[27] = oldDate;
     state[28] = newDate;
     state[29] = *(const u32 *)(record + 12);
-    state[30] = *(const u16 *)(record + 6);
+    // keep the pre-rollover earned counter with the native old Today
+    state[30] = *(const u16 *)(record + 6) | (state[6] & 0xFFFF0000u);
     state[33] = state[19];
     state[34] = state[12];
     state[24] = 1u;
