@@ -118,24 +118,33 @@ PLUGIN_CODE(coin) u32 PLUGIN_coin_HomeCatchupState(void)
     return g_coinHandoffControl ? g_coinHandoffControl[24] : 0u;
 }
 
+// HOME's RTC gate runs before catch-up, so only trust the completed calc stamp
+PLUGIN_CODE(coin) bool PLUGIN_coin_HomeFinishedDay(u32 stamp)
+{
+    return stamp && g_coinHandoffControl &&
+        g_coinHandoffControl[53] == stamp;
+}
+
 PLUGIN_CODE(coin) bool PLUGIN_coin_CopyHomeCatchup(u32 out[5])
 {
+    // the completed event stays pending through later HOME saves
     if (!g_coinHandoffControl || !out || g_coinHandoffControl[24] != 4u ||
-        g_coinHandoffControl[12] != g_coinHandoffControl[34] + 1u ||
-        g_coinHandoffControl[11] != g_coinHandoffControl[28])
+        (s32)(g_coinHandoffControl[12] -
+            (g_coinHandoffControl[34] + 1u)) < 0)
         return false;
     out[0] = g_coinHandoffControl[27];
     out[1] = g_coinHandoffControl[28];
     out[2] = g_coinHandoffControl[31];
     out[3] = g_coinHandoffControl[33];
-    out[4] = g_coinHandoffControl[12];
+    out[4] = g_coinHandoffControl[34] + 1u;
     return true;
 }
 
 PLUGIN_CODE(coin) void PLUGIN_coin_AcknowledgeHomeCatchup(u32 generation)
 {
     if (!g_coinHandoffControl || g_coinHandoffControl[24] != 4u ||
-        g_coinHandoffControl[12] != generation)
+        generation != g_coinHandoffControl[34] + 1u ||
+        (s32)(g_coinHandoffControl[12] - generation) < 0)
         return;
     g_coinHandoffControl[24] = 0u;
     __dmb();

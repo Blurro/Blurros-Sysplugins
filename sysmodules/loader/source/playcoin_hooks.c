@@ -17,6 +17,7 @@ extern void *pluginTable_coin[];
 #define COIN_MENU__UnmapPage ((void(*)(u32))pluginTable_coin[13])
 #define COIN_MENU__TempAlloc ((bool(*)(u32,u32*))pluginTable_coin[14])
 #define COIN_MENU__TempFree ((void(*)(u32,u32))pluginTable_coin[15])
+#define COIN_MENU__BridgeSend ((bool(*)(u32,u32,const void*,u32))pluginTable_coin[16])
 #define COIN_HOST__FSUSER_OpenArchive       ((Result(*)(FS_Archive*,FS_ArchiveID,FS_Path))pluginTable_coin[0])
 #define COIN_HOST__FSUSER_CloseArchive      ((Result(*)(FS_Archive))pluginTable_coin[1])
 #define COIN_HOST__FSUSER_OpenFile          ((Result(*)(Handle*,FS_Archive,FS_Path,u32,u32))pluginTable_coin[2])
@@ -44,6 +45,8 @@ extern u32 PLUGIN_coin_handoffControl;
 extern u32 PLUGIN_coin_accountingLoadTarget;
 extern u32 PLUGIN_coin_accountingLoadPrologue2;
 extern u32 PLUGIN_coin_accountingSaveTarget;
+extern u32 PLUGIN_coin_accountingWriteReturn;
+extern void PLUGIN_coin_accountingWriteHook(void);
 extern u32 PLUGIN_coin_settingsSaveTarget;
 extern u32 PLUGIN_coin_settingsSaveReturn;
 extern void PLUGIN_coin_settingsSaveHook(void);
@@ -471,7 +474,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     }
 
     u32 *coinCalc = (u32*)(code + coinCalcRaw);
-    if (coinCalcRaw < 0x300u || textSize - coinCalcRaw < 0x4D8u)
+    if (coinCalcRaw < 0x300u || textSize - coinCalcRaw < 0x570u)
     {
         PLUGIN_coin_ClearTransientHomePointer();
         return;
@@ -495,7 +498,10 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
         // check the second load copies the file object to r4 before replaying it
         ((u32*)(code + loadTarget - 0x100000u))[1] != 0xE1A04000u ||
         ((u32*)(code + saveTarget - 0x100000u))[0] != 0xE92D40F0u ||
-        ((u32*)(code + saveTarget - 0x100000u))[1] != 0xE24DD00Cu)
+        ((u32*)(code + saveTarget - 0x100000u))[1] != 0xE24DD00Cu ||
+        ((u32*)(code + saveTarget - 0x100000u))[0x90u / 4u] != 0xE12FFF3Cu ||
+        ((u32*)(code + saveTarget - 0x100000u))[0x94u / 4u] != 0xE1A05000u ||
+        ((u32*)(code + saveTarget - 0x100000u))[0x98u / 4u] != 0xE2100102u)
     {
         PLUGIN_coin_ClearTransientHomePointer();
         return;
@@ -604,7 +610,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     u32 stateMapBase;
     u32 stateMapped;
     if (((u32)&PLUGIN_coin_dat & ~0xFFFu) !=
-            (((u32)&PLUGIN_coin_handoffControl + 167u) & ~0xFFFu) ||
+            (((u32)&PLUGIN_coin_handoffControl + 215u) & ~0xFFFu) ||
         !COIN_MENU__MapPage(CUR_PROCESS_HANDLE, (u32)&PLUGIN_coin_dat,
             &stateMapBase, &stateMapped))
     {
@@ -625,7 +631,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
     mappedHandoffControl[4] = 0;
     mappedHandoffControl[5] = 0;
     mappedHandoffControl[6] = 0;
-    for (u32 i = 7; i < 42u; i++)
+    for (u32 i = 7; i < 54u; i++)
         ((volatile u32*)mappedHandoffControl)[i] = 0; // keep mapped stores inline
     if (!PLUGIN_coin_InitializeHomeMenuState(mappedDat, mappedBin,
             mappedChange, homePointer, &mappedHandoffControl[7]))
@@ -639,12 +645,18 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PatchHomeMenu(u8 *code, u32 textSize)
         !PLUGIN_coin_WriteOwnCodeWord(
             (u32)&PLUGIN_coin_accountingLoadPrologue2,
             ((u32*)(code + loadTarget - 0x100000u))[1]) ||
-        !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_accountingSaveTarget, saveTarget + 8u))
+        !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_accountingSaveTarget, saveTarget + 8u) ||
+        !PLUGIN_coin_WriteOwnCodeWord((u32)&PLUGIN_coin_accountingWriteReturn,
+            saveTarget + 0x9Cu))
     {
         COIN_MENU__UnmapPage(stateMapBase);
         PLUGIN_coin_ClearTransientHomePointer();
         return;
     }
+
+    u32 writePatch[2] = {0xE51FF004u,
+        PLUGIN_coin_Phys(PLUGIN_coin_accountingWriteHook)};
+    PLUGIN_coin_PatchWords(code, saveTarget + 0x94u, writePatch, 2u);
 
     // hook both shared load/save helpers so init and regular saves see the same state
     u32 accountingPatch[2] = {0xE51FF004u, PLUGIN_coin_Phys(PLUGIN_coin_accountingLoadHook)};
@@ -725,6 +737,15 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_PrepareHomeMenu(
     return true;
 }
 
+// start the quick Settings request check once its patched process exists
+PLUGIN_CODE(coin) void PLUGIN_coin_SettingsProcessCreated(PluginMenuLoaderContext *context)
+{
+    if (!context || !context->process || !COIN_MENU__BridgeSend)
+        return;
+
+    (void)COIN_MENU__BridgeSend(0x6E696F63u, 0x53455401u, NULL, 0u);
+}
+
 PLUGIN_CODE(coin) bool PLUGIN_coin_PrepareSettings(PluginMenuLoaderContext *context)
 {
     if (!context || !context->codeSet || !context->code ||
@@ -732,7 +753,7 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_PrepareSettings(PluginMenuLoaderContext *cont
         (context->codeSet->text_addr & 3u) != 0u ||
         context->codeSet->text_addr + context->textSize < context->codeSet->text_addr ||
         ((u32)&PLUGIN_coin_dat & ~0xFFFu) !=
-            (((u32)&PLUGIN_coin_handoffControl + 168u) & ~0xFFFu))
+            (((u32)&PLUGIN_coin_handoffControl + 215u) & ~0xFFFu))
         return false;
 
     // Settings follows one load -> PTM checkpoint -> save path, with BL/CMP displaced

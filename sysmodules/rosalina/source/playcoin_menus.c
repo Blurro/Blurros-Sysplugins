@@ -319,22 +319,33 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebugBucketValuesNoLock(bool clear
     );
 }
 
-PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebugLiveRows(bool dayChanged)
+PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebugBucketHeaderNoLock(void)
+{
+    PLUGIN_coin_ClearDebugBucketLine(36u);
+    COIN_HOST__Draw_DrawString(
+        COIN_DEBUG_BUCKET_X,
+        36u,
+        g_coinHomeRollPending ? COLOR_YELLOW : COLOR_GRAY,
+        g_coinHomeRollPending ? g_coinBucketRollPending : g_coinBucketGroup
+    );
+}
+
+PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebugLiveRows(void)
 {
     if (!g_coinProgressiveCostEnabled)
         return;
 
     COIN_HOST__Draw_Lock();
     PLUGIN_coin_DrawDebugTimestampNoLock();
-    if (dayChanged)
-        PLUGIN_coin_DrawDebugBucketValuesNoLock(true);
+    PLUGIN_coin_DrawDebugBucketHeaderNoLock();
+    PLUGIN_coin_DrawDebugBucketValuesNoLock(true);
     COIN_HOST__Draw_FlushFramebuffer();
     COIN_HOST__Draw_Unlock();
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
 {
-    PLUGIN_coin_UpdateDayHistoryForDay(PLUGIN_coin_CurrentCalendarDay());
+    (void)PLUGIN_coin_DayHistoryNeedsUpdate(PLUGIN_coin_CurrentCalendarDay());
 
     COIN_HOST__Draw_Lock();
     COIN_HOST__Draw_ClearFramebuffer();
@@ -406,7 +417,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_DrawDebug(void)
 
     if (g_coinProgressiveCostEnabled)
     {
-        COIN_HOST__Draw_DrawString(COIN_DEBUG_BUCKET_X, 36u, COLOR_GRAY, g_coinBucketGroup);
+        PLUGIN_coin_DrawDebugBucketHeaderNoLock();
         PLUGIN_coin_DrawDebugTimestampNoLock();
         PLUGIN_coin_DrawDebugBucketValuesNoLock(false);
     }
@@ -478,10 +489,10 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenDebug(void)
         if (redrawTicks >= 20u)
         {
             redrawTicks = 0;
-            bool dayChanged = PLUGIN_coin_UpdateDayHistoryForDay(
+            (void)PLUGIN_coin_DayHistoryNeedsUpdate(
                 PLUGIN_coin_CurrentCalendarDay()
             );
-            PLUGIN_coin_DrawDebugLiveRows(dayChanged);
+            PLUGIN_coin_DrawDebugLiveRows();
         }
     } while (!COIN_HOST__menuShouldExit);
 }

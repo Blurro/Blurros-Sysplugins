@@ -36,6 +36,7 @@ extern Result PLUGIN_coin_svcSendSyncRequest(Handle handle);
 extern bool PLUGIN_coin_PrepareHomeMenu(PluginMenuLoaderContext *context);
 extern bool PLUGIN_coin_PrepareNewsList(PluginMenuLoaderContext *context);
 extern bool PLUGIN_coin_PrepareSettings(PluginMenuLoaderContext *context);
+extern void PLUGIN_coin_SettingsProcessCreated(PluginMenuLoaderContext *context);
 extern void PLUGIN_coin_NewsListProcessCreated(PluginMenuLoaderContext *context);
 
 PLUGIN_DATA(coin) void *pluginTable_coin[] = {
@@ -55,6 +56,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)PLUGIN_MENU_UnmapPage,
     (void*)PLUGIN_MENU_TempAlloc,
     (void*)PLUGIN_MENU_TempFree,
+    (void*)PLUGIN_MENU_BridgeSend,
 };
 
 #define COIN_HOST__FSUSER_OpenArchive  ((Result(*)(FS_Archive*,FS_ArchiveID,FS_Path))pluginTable_coin[0])
@@ -73,6 +75,7 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_MENU__UnmapPage           ((void(*)(u32))pluginTable_coin[13])
 #define COIN_MENU__TempAlloc           ((bool(*)(u32,u32*))pluginTable_coin[14])
 #define COIN_MENU__TempFree            ((void(*)(u32,u32))pluginTable_coin[15])
+#define COIN_MENU__BridgeSend          ((bool(*)(u32,u32,const void*,u32))pluginTable_coin[16])
 
 PLUGIN_RODATA(coin) static const char g_coinFilePath[] = "/luma/coins.bin";
 PLUGIN_RODATA(coin) static const char g_gameCoinPath[] = "/gamecoin.dat";
@@ -111,7 +114,7 @@ PLUGIN_DATA(coin) static PluginMenuLoaderTitlePatch g_coinSettingsPatch = {
     .titleIds = g_coinSettingsTitleIds,
     .titleIdCount = sizeof(g_coinSettingsTitleIds) / sizeof(g_coinSettingsTitleIds[0]),
     .prepare = PLUGIN_coin_PrepareSettings,
-    .processCreated = NULL,
+    .processCreated = PLUGIN_coin_SettingsProcessCreated,
     .loaderFinished = NULL,
     .next = NULL,
     .menuEpoch = 0,
@@ -954,7 +957,9 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_QueryHomeCatchup(void)
     if (state[24] != 1u || !queryAddress ||
         state[5] != state[28] ||
         (state[12] != state[34] && state[11] != state[28]))
+    {
         return;
+    }
 
     u16 history[24];
     volatile u16 *clear = history;
@@ -964,7 +969,9 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_QueryHomeCatchup(void)
         (Result (*)(u16 *, u32, u32, u32))queryAddress;
     Result rc = query(history, 24u, state[25], state[26]);
     if (R_FAILED(rc))
+    {
         return;
+    }
 
     u32 total = 0;
     for (u32 i = 0; i < 24u; i++)
@@ -1016,7 +1023,9 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PrepareHomeCatchup(
         state[24] = 0u;
     if (state[24] || !record || state[7] != 1u || state[13] ||
         state[14] || *(const u32 *)record != 0x4F00u)
+    {
         return;
+    }
 
     u32 oldDate = *(const u32 *)(record + 16);
     u32 newDate = state[5];
@@ -1024,9 +1033,18 @@ PLUGIN_CODE(coin) void PLUGIN_coin_PrepareHomeCatchup(
     if (!oldOrdinal || PLUGIN_coin_CatchupOrdinal(newDate) != oldOrdinal + 1u ||
         state[11] != oldDate || state[8] != *(const u16 *)(record + 6) ||
         state[10] != *(const u32 *)(record + 12) ||
-        (state[23] & 0x80000000u) ||
-        (state[23] & 0x7FFFFFFFu) != oldOrdinal)
+        (state[23] & 0x80000000u))
+    {
         return;
+    }
+
+    // rosalina may already have rotated coins.bin before HOME starts catch-up
+    // accept the old private anchor or its exact next-day rollover
+    u32 privateDay = state[23] & 0x7FFFFFFFu;
+    if (privateDay != oldOrdinal && privateDay != oldOrdinal + 1u)
+    {
+        return;
+    }
 
     state[25] = oldTimeLow;
     state[26] = oldTimeHigh;

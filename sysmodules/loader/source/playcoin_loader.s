@@ -92,6 +92,27 @@ PLUGIN_coin_handoffControl:
     .word 0                      @ wallet pointer for rollback
     .word 0                      @ native wallet pointer for rollback
     .word 0                      @ earned counter pointer for rollback
+    .word 0                      @ actual native write result
+    .word 0                      @ actual native bytes written
+    .word 0                      @ HOME save attempts
+    .word 0                      @ HOME snapshots published
+    .space 32, 0                  @ catch-up trace, word 53 = finished HOME date
+
+@ capture the writer result before Nintendo cleanup clobbers r0
+.global PLUGIN_coin_accountingWriteReturn
+PLUGIN_coin_accountingWriteReturn: .word 0
+.global PLUGIN_coin_accountingWriteHook
+PLUGIN_coin_accountingWriteHook:
+    push    {r1-r3, r12}
+    adrl    r1, PLUGIN_coin_handoffControl
+    str     r0, [r1, #168]
+    ldr     r2, [sp, #20]       @ writer's bytes-out at its original sp + 4
+    str     r2, [r1, #172]
+    mcr     p15, 0, r2, c7, c10, 5
+    pop     {r1-r3, r12}
+    mov     r5, r0              @ replay both replaced instructions
+    ands    r0, r0, #0x80000000
+    ldr     pc, PLUGIN_coin_accountingWriteReturn
 
 @ Settings already calculated PTM checkpoints, so save ours before native gamecoin.dat
 .global PLUGIN_coin_settingsSaveTarget
@@ -103,7 +124,7 @@ PLUGIN_coin_settingsSaveReturn: .word 0
 PLUGIN_coin_settingsSaveHook:
     push    {r4-r8, lr}
     mov     r5, r1              @ calculated 20-byte record on Settings stack
-    adr     r7, PLUGIN_coin_handoffControl
+    adrl     r7, PLUGIN_coin_handoffControl
     ldr     r6, [r5]
     mov     r8, #0x4f00
     cmp     r6, r8
@@ -210,7 +231,7 @@ PLUGIN_coin_accountingLoadPrologue2:
 PLUGIN_coin_accountingLoadHook:
     push    {r4-r8, lr}
     mov     r4, r1
-    adr     r6, PLUGIN_coin_handoffControl
+    adrl     r6, PLUGIN_coin_handoffControl
     ldr     r8, [r6]            @ keep an outer load busy through nested saves
     cmp     r8, #0
     moveq   r7, #0
@@ -226,7 +247,7 @@ PLUGIN_coin_accountingLoadHook:
     mov     r7, #0x4f00
     cmp     r6, r7
     bne     accountingLoadDone
-    adr     r6, PLUGIN_coin_handoffControl
+    adrl     r6, PLUGIN_coin_handoffControl
     ldr     r7, [r6, #28]
     cmp     r7, #1
     bne     accountingLoadDone
@@ -269,7 +290,7 @@ accountingLoadOverlay:
     str     r7, [r4, #16]
 accountingLoadDone:
     @ don't replay yesterday's private cursor while Settings is still saving
-    adr     r6, PLUGIN_coin_handoffControl
+    adrl     r6, PLUGIN_coin_handoffControl
     ldr     r7, [r6, #56]
     cmp     r7, #1
     bne     accountingLoadFinish
@@ -283,7 +304,7 @@ accountingLoadDone:
     str     r7, [r4, #16]
 accountingLoadFinish:
     @ HOME may skip the calculation/save. restore only our own busy state
-    adr     r6, PLUGIN_coin_handoffControl
+    adrl     r6, PLUGIN_coin_handoffControl
     str     r8, [r6]
     mcr     p15, 0, r8, c7, c10, 5
     mov     r0, r5
@@ -299,7 +320,7 @@ PLUGIN_coin_accountingSaveOriginal:
 PLUGIN_coin_accountingSaveHook:
     push    {r4-r8, lr}
     mov     r4, r1
-    adr     r5, PLUGIN_coin_handoffControl
+    adrl     r5, PLUGIN_coin_handoffControl
     ldr     r7, [r5]            @ a default save can run inside a load
     mov     r6, #1
     str     r6, [r5]
@@ -314,20 +335,40 @@ PLUGIN_coin_accountingSaveHook:
     mov     r8, #11
     streqh  r8, [r4, #6]        @ original writer sees the native lock
 accountingSaveNativeReady:
+    adrl    r5, PLUGIN_coin_handoffControl
+    mvn     r8, #0
+    str     r8, [r5, #168]      @ no writer observation means no committed snapshot
+    mov     r8, #0
+    str     r8, [r5, #172]
+    ldr     r8, [r5, #176]
+    add     r8, r8, #1
+    str     r8, [r5, #176]
     bl      PLUGIN_coin_accountingSaveOriginal
     mov     r8, r0              @ keep the helper's return value
     strh    r6, [r4, #6]        @ HOME and the private snapshot stay real
-    cmp     r8, #0
-    blt     accountingSaveDone  @ failed native save cannot advance snapshot
-    @ a load can make a default record, so keep the earlier private snapshot
-    cmp     r7, #0
+    adrl    r5, PLUGIN_coin_handoffControl
+    ldr     r5, [r5, #168]
+    cmp     r5, #0
+    blt     accountingSaveDone  @ use the writer Result, never the helper return
+    adrl    r5, PLUGIN_coin_handoffControl
+    ldr     r5, [r5, #172]
+    cmp     r5, #20
     bne     accountingSaveDone
+    @ a nested default save normally keeps the earlier private snapshot
+    @ a completed catch-up still needs its successful save published
+    cmp     r7, #0
+    beq     accountingSaveCheckRecord
+    adrl    r5, PLUGIN_coin_handoffControl
+    ldr     r5, [r5, #96]       @ catch-up phase
+    cmp     r5, #3
+    bne     accountingSaveDone
+accountingSaveCheckRecord:
     @ only trust a valid gamecoin record as the next snapshot
     ldr     r5, [r4]
     mov     r6, #0x4f00
     cmp     r5, r6
     bne     accountingSaveDone
-    adr     r5, PLUGIN_coin_handoffControl
+    adrl     r5, PLUGIN_coin_handoffControl
     ldrh    r6, [r4, #6]        @ original HOME Today was restored after native save
     str     r6, [r5, #32]      @ publish real Today, never the 0x4f00 magic
     ldr     r6, [r4, #8]
@@ -339,6 +380,9 @@ accountingSaveNativeReady:
     ldr     r6, [r5, #48]
     add     r6, r6, #1
     str     r6, [r5, #48]
+    ldr     r6, [r5, #180]
+    add     r6, r6, #1
+    str     r6, [r5, #180]
     ldr     r6, [r5, #76]
     and     r6, r6, #0x40000000
     str     r6, [r5, #76]        @ this snapshot needs a fresh flat checkpoint
@@ -347,9 +391,13 @@ accountingSaveNativeReady:
     mcr     p15, 0, r6, c7, c10, 5
 accountingSaveDone:
     mov     r0, r4
-    mov     r1, r8
+    adrl    r5, PLUGIN_coin_handoffControl
+    ldr     r1, [r5, #168]
+    ldr     r5, [r5, #172]
+    cmp     r5, #20
+    mvnne   r1, #0
     bl      PLUGIN_coin_FinishHomeCatchupSave
-    adr     r5, PLUGIN_coin_handoffControl
+    adrl     r5, PLUGIN_coin_handoffControl
     str     r7, [r5]
     mcr     p15, 0, r7, c7, c10, 5
     mov     r0, r8
@@ -815,6 +863,11 @@ afterBinLogic:
     pop     {r0-r3, r12, lr}
 
 finishHomeCalculation:
+    @ only the completed HOME calculation can release a private day rollover
+    adrl    r8, PLUGIN_coin_handoffControl
+    ldr     r7, [r8, #20]
+    str     r7, [r8, #212]       @ finished HOME calculation calendar stamp
+    mcr     p15, 0, r7, c7, c10, 5
     ldr     r8, [r9, #0x24]
     mov     r7, #0
     str     r7, [r8, #4]          @ consume RTC rebase marker once

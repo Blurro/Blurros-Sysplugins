@@ -166,6 +166,8 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
     (void*)PLUGIN_MENU_ExtractRawFile,
     (void*)PLUGIN_MENU_GetApiVersion,
     (void*)PLUGIN_blur_SleepCycleCounter,
+    (void*)PLUGIN_MENU_RegisterBridgeReceiver,
+    (void*)PLUGIN_MENU_UnregisterBridgeReceiver,
 };
 
 #define COIN_BLUR__AddTickFunc            ((bool(*)(BlurTickFunc,s64))pluginTable_coin[0])
@@ -214,6 +216,10 @@ PLUGIN_DATA(coin) void *pluginTable_coin[] = {
 #define COIN_HOST__Sleep_TryEnterIo        ((bool(*)(void))pluginTable_coin[47])
 #define COIN_HOST__Sleep_LeaveIo           ((void(*)(void))pluginTable_coin[48])
 #define COIN_BLUR__SleepCycleCounter       ((u32(*)(void))pluginTable_coin[52])
+#define COIN_MENU__RegisterBridgeReceiver  ((bool(*)(PluginMenuBridgeRegistration*))pluginTable_coin[53])
+#define COIN_MENU__UnregisterBridgeReceiver ((bool(*)(PluginMenuBridgeRegistration*))pluginTable_coin[54])
+#define COIN_SETTINGS_BRIDGE_START         0x53455401u
+#define COIN_SETTINGS_FAST_POLL_NS         25000000LL
 #define COIN_MENU__RemoveItem             ((bool(*)(PluginMenuRegistration*))pluginTable_coin[49])
 #define COIN_MENU__ExtractRawFile          ((Result(*)(const PluginMenuFileContext*,u32,u32,const char*))pluginTable_coin[50])
 #define COIN_MENU__GetApiVersion           ((u32(*)(void))pluginTable_coin[51])
@@ -337,6 +343,7 @@ PLUGIN_RODATA(coin) static const char g_coinHistoryQueryNone[] = "Not queried th
 PLUGIN_RODATA(coin) static const char g_coinHistoryQueryTimeFmt[] = "%s";
 PLUGIN_RODATA(coin) static const char g_coinHistoryQueryTimeBad[] = "Date unavailable";
 PLUGIN_RODATA(coin) static const char g_coinBucketGroup[] = "Rolling walk buckets";
+PLUGIN_RODATA(coin) static const char g_coinBucketRollPending[] = "HOME roll pending!";
 PLUGIN_RODATA(coin) static const char g_coinBucketNowFmt[] = "Now: %s";
 PLUGIN_RODATA(coin) static const char g_coinBucketTodayFmt[] = "Today: %u";
 PLUGIN_RODATA(coin) static const char g_coinBucketPrevFmt[] = "D-%lu: %u";
@@ -544,6 +551,9 @@ PLUGIN_BSS(coin) static PluginMenuRegistration g_coinMenuRegistration;
 PLUGIN_BSS(coin) static bool g_coinMenuRegistered;
 PLUGIN_BSS(coin) static BlurFeatureRegistration g_coinBlurFeatureRegistration;
 PLUGIN_BSS(coin) static RecursiveLock g_coinStateLock;
+PLUGIN_BSS(coin) static PluginMenuBridgeRegistration g_coinSettingsBridgeRegistration;
+PLUGIN_BSS(coin) static bool g_coinSettingsBridgeRegistered;
+PLUGIN_BSS(coin) static bool g_coinSettingsFastPollActive;
 PLUGIN_BSS(coin) static u32 g_coinNewsLedAddress;
 PLUGIN_BSS(coin) static bool g_coinNewsLedActive;
 PLUGIN_BSS(coin) static volatile u32 g_coinHardDiagState;
@@ -558,16 +568,22 @@ PLUGIN_BSS(coin) static u32 g_coinAchievementSavedMask;
 PLUGIN_BSS(coin) static bool g_coinAchievementsEnabled;
 PLUGIN_BSS(coin) static bool g_coinProgressiveCostEnabled;
 PLUGIN_BSS(coin) static bool g_coinSavePending;
+PLUGIN_BSS(coin) static bool g_coinBootRekeyPending;
+PLUGIN_BSS(coin) static bool g_coinCatchupNeedsFullSave;
 PLUGIN_BSS(coin) static bool g_coinDayTransitionAuthorized;
+PLUGIN_BSS(coin) static bool g_coinHomeRollPending;
 PLUGIN_BSS(coin) static bool g_coinEarnedEventPending;
 PLUGIN_BSS(coin) static bool g_coinCompletedWalkPending;
 PLUGIN_BSS(coin) static u32 g_coinCompletedDay;
 PLUGIN_BSS(coin) static u32 g_coinCompletedWeek;
+PLUGIN_BSS(coin) static u32 g_coinCompletedWindowDay;
+PLUGIN_BSS(coin) static u32 g_coinCompletedWindowBeforeRoll;
 PLUGIN_BSS(coin) static u32 g_coinExtendedData[COIN_FILE_EXTENSION_WORDS];
 PLUGIN_BSS(coin) static u32 g_coinAccountingSavedGeneration;
 PLUGIN_BSS(coin) static bool g_coinAssetsReady;
 PLUGIN_BSS(coin) static bool g_coinStartupAttached;
 PLUGIN_BSS(coin) static bool g_coinExtendedDirty;
+PLUGIN_BSS(coin) static bool g_coinRolloverDirty;
 PLUGIN_BSS(coin) static bool g_coinMilestoneEvent;
 PLUGIN_BSS(coin) static u32 g_coinMaintenanceTicks;
 PLUGIN_BSS(coin) static u32 g_coinAssetRetryTicks;
@@ -575,6 +591,7 @@ PLUGIN_BSS(coin) static u32 g_coinFlatModeChangeGeneration;
 PLUGIN_BSS(coin) static u32 g_coinCatchupAppliedGeneration;
 PLUGIN_BSS(coin) static u32 g_coinNativeSentinelDay;
 PLUGIN_BSS(coin) static u32 g_coinLastSleepCycle;
+PLUGIN_BSS(coin) static bool g_coinBootSentinelPending;
 PLUGIN_BSS(coin) static char (*g_coinAchievementTitles)[40];
 PLUGIN_BSS(coin) static char *g_coinAchievementDetailTitle;
 PLUGIN_BSS(coin) static char *g_coinAchievementDetailMessage;
@@ -594,11 +611,13 @@ PLUGIN_BSS(coin) static u32 g_coinNewsRawRemoved;
 extern bool PLUGIN_coin_AttachHomeMenu(bool *incompatible);
 extern bool PLUGIN_coin_HomeMenuLoaded(void);
 PLUGIN_CODE(coin) static void PLUGIN_coin_OnBlurTick(u64 delta);
+PLUGIN_CODE(coin) static void PLUGIN_coin_OnSettingsFastTick(u64 delta);
 extern bool PLUGIN_coin_LockHomeState(Handle *processHandleOut);
 extern bool PLUGIN_coin_UnlockHomeState(Handle processHandle);
 extern bool PLUGIN_coin_CopyHomeAccounting(u32 out[5], u32 *generation);
 extern bool PLUGIN_coin_HomeAccountingChanged(u32 savedGeneration);
 extern u32 PLUGIN_coin_HomeCatchupState(void);
+extern bool PLUGIN_coin_HomeFinishedDay(u32 stamp);
 extern bool PLUGIN_coin_CopyHomeCatchup(u32 out[5]);
 extern void PLUGIN_coin_AcknowledgeHomeCatchup(u32 generation);
 extern bool PLUGIN_coin_SetHomeFlatMode(bool flat);
@@ -732,6 +751,12 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_HomeCounterExceedsToday(u32 currentDay
 PLUGIN_CODE(coin) static void PLUGIN_coin_ClampTodayToHomeCounter(u32 currentDay, u32 currentStamp)
 {
     if (!PLUGIN_coin_HomeCounterExceedsToday(currentDay, currentStamp))
+        return;
+    u32 accounting[5];
+    u32 generation = 0;
+    // called with HOME locked, so only this day's saved counter can set a floor
+    if (!PLUGIN_coin_CopyHomeAccounting(accounting, &generation) ||
+        accounting[4] != currentStamp)
         return;
 
     // HOME is a floor, only day rotation can lower Today
@@ -876,6 +901,7 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleSettingsRequest(void)
 
     if (R_SUCCEEDED(rc))
     {
+        g_coinRolloverDirty = false;
         u32 generation = 0;
         // Settings used the old remainder, so keep the old Today or the new day's zero
         g_coinProgressiveState[0] = PLUGIN_coin_GetTodayWalked();
@@ -962,11 +988,46 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_InstallNativeSentinel(const u32 acco
     return rc;
 }
 
+PLUGIN_CODE(coin) static bool PLUGIN_coin_CatchupCanSettleBeforeRoll(
+    bool hasCatchup, const u32 catchup[5], u32 currentDay,
+    u32 currentStamp, u32 privateDay)
+{
+    if (!hasCatchup)
+        return false;
+
+    (void)currentStamp;
+    u32 oldDay = PLUGIN_coin_SettingsDayOrdinal(catchup[0]);
+    u32 newDay = PLUGIN_coin_SettingsDayOrdinal(catchup[1]);
+    // the event can outlive its first midnight if HOME settles late
+    return oldDay && newDay == oldDay + 1u &&
+        g_coinCatchupAppliedGeneration != catchup[4] &&
+        currentDay >= newDay &&
+        currentDay - newDay <= COIN_DAY_HISTORY_COUNT &&
+        privateDay >= oldDay && privateDay <= currentDay &&
+        privateDay - oldDay <= COIN_DAY_HISTORY_COUNT &&
+        !(g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] &
+            COIN_EXT_DAY_REBASE_PRESERVE);
+}
+
+PLUGIN_CODE(coin) static bool PLUGIN_coin_HomeDateAllowsSettlement(
+    u32 homeStamp, u32 currentStamp, u32 privateDay, u32 pending,
+    bool hasCatchup, const u32 catchup[5], u32 currentDay)
+{
+    if (homeStamp == currentStamp ||
+        (!homeStamp && !privateDay && !pending))
+        return true;
+
+    // a verified, completed HOME catch-up must be saved even if RTC moved on
+    if (!hasCatchup || homeStamp != catchup[1])
+        return false;
+    u32 catchupDay = PLUGIN_coin_SettingsDayOrdinal(catchup[1]);
+    return catchupDay && currentDay >= catchupDay &&
+        currentDay - catchupDay <= COIN_DAY_HISTORY_COUNT;
+}
+
 PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
 {
-    if (!g_patchedHome)
-        (void)PLUGIN_coin_GenerateRandomBytes(&g_coinKey, sizeof(g_coinKey));
-
+    // setup loaded the persisted key, don't rekey ahead of a full save
     Handle homeProcess = 0;
     if (!PLUGIN_coin_LockHomeState(&homeProcess))
     {
@@ -993,6 +1054,32 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     u32 currentDay = 0;
     u32 currentStamp = 0;
     (void)PLUGIN_coin_ReadCalendarNow(&currentDay, &currentStamp);
+
+    // HOME owns the dated payout, but rosalina owns the private day buckets
+    // don't consume new coins until both agree on the current day
+    u32 datedAccounting[5];
+    u32 datedGeneration = 0;
+    u32 privateDay = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD] &
+        COIN_EXT_DAY_VALUE_MASK;
+    // HOME settles catch-up against old Today before this save rotates the buckets
+    bool settleBeforeRoll = PLUGIN_coin_CatchupCanSettleBeforeRoll(
+        hasCatchup, catchup, currentDay, currentStamp, privateDay);
+    // without catch-up, HOME still has to finish today's calculation first
+    bool homeFinishedDay = PLUGIN_coin_HomeFinishedDay(currentStamp);
+    if (!currentDay || !currentStamp ||
+        !PLUGIN_coin_CopyHomeAccounting(datedAccounting, &datedGeneration) ||
+        // don't publish a new private day alongside stale HOME accounting
+        !PLUGIN_coin_HomeDateAllowsSettlement(datedAccounting[4],
+            currentStamp, privateDay, PLUGIN_coin_PendingEarned(),
+            hasCatchup, catchup, currentDay) ||
+        (privateDay && privateDay != currentDay && !settleBeforeRoll &&
+            !(catchupState == 0u && !hasCatchup && homeFinishedDay &&
+                datedAccounting[4] == currentStamp)))
+    {
+        g_coinSavePending = true;
+        (void)PLUGIN_coin_UnlockHomeState(homeProcess);
+        return;
+    }
 
     bool otherWork = hasCatchup || !g_patchedHome ||
         !PLUGIN_coin_HomeAccountingReady() ||
@@ -1033,9 +1120,11 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
         u32 oldDay = PLUGIN_coin_SettingsDayOrdinal(catchup[0]);
         u32 newDay = PLUGIN_coin_SettingsDayOrdinal(catchup[1]);
         u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
+        u32 anchor = dayState & COIN_EXT_DAY_VALUE_MASK;
+        // the catch-up belongs to its recorded day, not the worker's yesterday
         if (!oldDay || newDay != oldDay + 1u || newDay > currentDay ||
             (dayState & COIN_EXT_DAY_REBASE_PRESERVE) ||
-            (dayState & COIN_EXT_DAY_VALUE_MASK) != oldDay ||
+            anchor < oldDay || anchor - oldDay > COIN_DAY_HISTORY_COUNT ||
             PLUGIN_coin_PendingEarned() < catchup[2])
         {
             g_coinSavePending = true;
@@ -1044,28 +1133,52 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
         }
 
         previousDayShadow = catchup[2];
-        u32 previousDayBucket = PLUGIN_coin_GetTodayWalked() +
-            previousDayShadow;
+        u32 age = anchor - oldDay;
+        u32 existing = age ? PLUGIN_coin_GetHistoryDay(age - 1u) :
+            PLUGIN_coin_GetTodayWalked();
+        u32 previousDayBucket = existing + previousDayShadow;
         if (previousDayBucket > 0xFFFFu)
             previousDayBucket = 0xFFFFu;
+        // a completed week ends on the catch-up's date, never the new Today
         u32 completedWeek = previousDayBucket;
-        for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
-            completedWeek += PLUGIN_coin_GetHistoryDay(i);
+        if (!age)
+        {
+            for (u32 i = 0; i < COIN_DAY_HISTORY_COUNT; i++)
+                completedWeek += PLUGIN_coin_GetHistoryDay(i);
+        }
+        else if (g_coinCompletedWindowDay == oldDay)
+        {
+            completedWeek = g_coinCompletedWindowBeforeRoll +
+                (previousDayBucket - existing);
+        }
+        else
+        {
+            // after a reboot the oldest dates may be gone, use a safe lower bound
+            for (u32 i = age; i < COIN_DAY_HISTORY_COUNT; i++)
+                completedWeek += PLUGIN_coin_GetHistoryDay(i);
+        }
 
-        // keep the completed window until its save goes through
+        // credit old Today before rotating, or its matching history slot after
         g_coinCompletedDay = previousDayBucket;
         g_coinCompletedWeek = completedWeek;
         g_coinCompletedWalkPending = true;
 
-        if (PLUGIN_coin_GetTodayWalked() != previousDayBucket)
+        if (existing != previousDayBucket)
         {
-            PLUGIN_coin_SetTodayWalked((u16)previousDayBucket);
+            if (age)
+                PLUGIN_coin_SetHistoryDay(age - 1u, (u16)previousDayBucket);
+            else
+                PLUGIN_coin_SetTodayWalked((u16)previousDayBucket);
             g_coinExtendedDirty = true;
         }
         g_coinCatchupAppliedGeneration = catchup[4];
+        g_coinCatchupNeedsFullSave = true;
     }
 
-    g_coinDayTransitionAuthorized = rtcDecisionValid || newCatchup;
+    // credit the old day first. HOME's finished calculation releases no-award rolls
+    g_coinDayTransitionAuthorized = newCatchup ||
+        (catchupState == 0u && !hasCatchup && homeFinishedDay &&
+            datedAccounting[4] == currentStamp);
     PLUGIN_coin_UpdateDayHistoryForDay(currentDay);
     g_coinDayTransitionAuthorized = false;
     if (rtcDecision != COIN_RTC_DAY_WAITING)
@@ -1185,6 +1298,12 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_HandleCoins(void)
     if (R_SUCCEEDED(rc) && R_FAILED(archiveCloseRc))
         rc = archiveCloseRc;
 
+    // the private save has reached disk even if native sentinel setup fails
+    if (R_SUCCEEDED(rc))
+    {
+        g_coinRolloverDirty = false;
+        g_coinCatchupNeedsFullSave = false;
+    }
     if (R_SUCCEEDED(rc) && !PLUGIN_coin_HomeAccountingReady())
     {
         rc = PLUGIN_coin_InstallNativeSentinel(accounting);
@@ -1642,6 +1761,7 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ReadNativeStepSnapshot(
 // only the worker updates this stamp, never HOME's native load
 PLUGIN_CODE(coin) static void PLUGIN_coin_MaintainNativeSentinel(u32 day, u32 stamp)
 {
+    // no private rollover here: HOME settles catch-up before history can rotate
     if (!g_patchedHome || !PLUGIN_coin_HomeAccountingReady())
         return;
 
@@ -1667,6 +1787,17 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_MaintainNativeSentinel(u32 day, u32 st
         (record[1] & 0xFFFFu) > 300u || (record[1] >> 16) > 11u ||
         !PLUGIN_coin_ValidAccountingDate(record[4])))
         rc = (Result)-28;
+
+    // don't reset the native step checkpoint before HOME settles old-day catch-up
+    if (R_SUCCEEDED(rc) && record[4] != stamp)
+    {
+        u32 accounting[5];
+        u32 generation = 0;
+        if (PLUGIN_coin_HomeCatchupState() ||
+            !PLUGIN_coin_CopyHomeAccounting(accounting, &generation) ||
+            accounting[4] != stamp)
+            rc = (Result)-1;
+    }
 
     u32 nativeCoinWord = R_SUCCEEDED(rc) ? record[1] : 0u;
     if (R_SUCCEEDED(rc))
@@ -1785,6 +1916,36 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OpenDebugSerialized(void)
 }
 
 
+// the bridge callback runs in rosalina, not in the loader callback
+PLUGIN_CODE(coin) static bool PLUGIN_coin_ReceiveSettingsBridge(
+    u32 command, const void *payload, u32 payloadSize)
+{
+    (void)payload;
+    if (command != COIN_SETTINGS_BRIDGE_START || payloadSize != 0u)
+        return true;
+    if (!g_coinsFailed && !g_coinSettingsFastPollActive)
+        g_coinSettingsFastPollActive =
+            COIN_BLUR__AddTickFunc(PLUGIN_coin_OnSettingsFastTick,
+                COIN_SETTINGS_FAST_POLL_NS);
+    return true;
+}
+
+// only handle Settings requests, leave daily maintenance on the 1-second tick
+PLUGIN_CODE(coin) static void PLUGIN_coin_OnSettingsFastTick(u64 delta)
+{
+    (void)delta;
+    if (!PLUGIN_coin_SettingsRequestPending())
+        return;
+
+    COIN_HOST__RecursiveLock_Lock(&g_coinStateLock);
+    if (!g_coinsFailed && g_patchedHome && COIN_HOST__Sleep_TryEnterIo())
+    {
+        PLUGIN_coin_HandleSettingsRequest();
+        COIN_HOST__Sleep_LeaveIo();
+    }
+    COIN_HOST__RecursiveLock_Unlock(&g_coinStateLock);
+}
+
 PLUGIN_CODE(coin) static void PLUGIN_coin_StopForIncompatibleHook(void)
 {
     g_coinsFailed = true;
@@ -1792,6 +1953,16 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_StopForIncompatibleHook(void)
         g_coinMenuRegistered = false;
     g_coinBlurFeatureRegistration.callback = NULL;
     (void)COIN_BLUR__RemoveTickFunc(PLUGIN_coin_OnBlurTick);
+    if (g_coinSettingsFastPollActive)
+    {
+        (void)COIN_BLUR__RemoveTickFunc(PLUGIN_coin_OnSettingsFastTick);
+        g_coinSettingsFastPollActive = false;
+    }
+    if (g_coinSettingsBridgeRegistered)
+    {
+        (void)COIN_MENU__UnregisterBridgeReceiver(&g_coinSettingsBridgeRegistration);
+        g_coinSettingsBridgeRegistered = false;
+    }
 }
 
 PLUGIN_CODE(coin) static void PLUGIN_coin_OnBlurTick(u64 delta)
@@ -1834,8 +2005,10 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OnBlurTick(u64 delta)
                 }
                 PLUGIN_coin_HandleSettingsRequest();
                 u32 sleepCycle = COIN_BLUR__SleepCycleCounter();
-                bool woke = sleepCycle != g_coinLastSleepCycle;
+                bool woke = sleepCycle != g_coinLastSleepCycle ||
+                    g_coinBootSentinelPending;
                 g_coinLastSleepCycle = sleepCycle;
+                g_coinBootSentinelPending = false;
                 u32 catchupState = PLUGIN_coin_HomeCatchupState();
                 bool workPending = coinsBin != g_lastCoins || PLUGIN_coin_PendingEarned() ||
                     g_coinSavePending || coinsEverSpent != g_lastEverSpent ||
@@ -1845,12 +2018,20 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OnBlurTick(u64 delta)
                 u32 currentDay = 0;
                 u32 currentStamp = 0;
                 bool calendarSampled = false;
-                if (maintenanceDue && !workPending)
+                if (maintenanceDue || woke || g_coinHomeRollPending)
                 {
-                    calendarSampled = true;
-                    (void)PLUGIN_coin_ReadCalendarNow(&currentDay, &currentStamp);
-                    workPending = PLUGIN_coin_HomeCounterExceedsToday(currentDay, currentStamp) ||
-                        PLUGIN_coin_DayHistoryNeedsUpdate(currentDay);
+                    calendarSampled = PLUGIN_coin_ReadCalendarNow(
+                        &currentDay, &currentStamp);
+                    if (calendarSampled)
+                    {
+                        bool rollPending = PLUGIN_coin_DayHistoryNeedsUpdate(currentDay);
+                        // a completed HOME day should settle on the next 1-second tick
+                        if (rollPending && PLUGIN_coin_HomeFinishedDay(currentStamp))
+                            workPending = true;
+                        if (maintenanceDue)
+                            workPending = workPending ||
+                                PLUGIN_coin_HomeCounterExceedsToday(currentDay, currentStamp);
+                    }
                 }
 
                 if (workPending && !(catchupState >= 1u && catchupState <= 3u))
@@ -1860,8 +2041,9 @@ PLUGIN_CODE(coin) static void PLUGIN_coin_OnBlurTick(u64 delta)
                 }
                 if (maintenanceDue || woke)
                 {
-                    if (!calendarSampled)
-                        (void)PLUGIN_coin_ReadCalendarNow(&currentDay, &currentStamp);
+                    if (!calendarSampled &&
+                        PLUGIN_coin_ReadCalendarNow(&currentDay, &currentStamp))
+                        (void)PLUGIN_coin_DayHistoryNeedsUpdate(currentDay);
                     PLUGIN_coin_MaintainNativeSentinel(currentDay, currentStamp);
                 }
             }
@@ -1927,6 +2109,8 @@ PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
 
     COIN_HOST__RecursiveLock_Init(&g_coinStateLock);
     g_coinLastSleepCycle = COIN_BLUR__SleepCycleCounter();
+    g_coinBootSentinelPending = true;
+    g_coinBootRekeyPending = true;
     PLUGIN_coin_LoadMenuSettings();
 
     if (!COIN_BLUR__AddTickFunc(PLUGIN_coin_OnBlurTick, 1000000000LL))
@@ -1951,6 +2135,18 @@ PLUGIN_MAIN(coin) bool PLUGIN_coin_Main(void)
     {
         g_coinMenuRegistered = true;
         PLUGIN_coin_RemoveBuiltInMenuItem();
+    }
+
+    // Settings opening is delivered by MENU's loader-to-rosalina bridge
+    if (COIN_MENU__RegisterBridgeReceiver &&
+        COIN_MENU__UnregisterBridgeReceiver)
+    {
+        g_coinSettingsBridgeRegistration.pluginId = COIN_PLUGIN_ID;
+        g_coinSettingsBridgeRegistration.callback =
+            PLUGIN_coin_ReceiveSettingsBridge;
+        g_coinSettingsBridgeRegistration.next = NULL;
+        g_coinSettingsBridgeRegistered =
+            COIN_MENU__RegisterBridgeReceiver(&g_coinSettingsBridgeRegistration);
     }
 
     return true;
