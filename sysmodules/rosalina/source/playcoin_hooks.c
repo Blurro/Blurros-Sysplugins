@@ -61,6 +61,13 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_HomeAccountingReady(void)
     return g_coinHandoffControl && g_coinHandoffControl[7] == 1u;
 }
 
+// prepared private values can be read before the first successful full save
+PLUGIN_CODE(coin) bool PLUGIN_coin_HomeAccountingPrepared(void)
+{
+    return g_coinHandoffControl &&
+        (g_coinHandoffControl[7] == 1u || g_coinHandoffControl[7] == 2u);
+}
+
 PLUGIN_CODE(coin) bool PLUGIN_coin_SettingsRequestPending(void)
 {
     return g_coinHandoffControl && g_coinHandoffControl[14] == 1u;
@@ -98,7 +105,7 @@ PLUGIN_CODE(coin) void PLUGIN_coin_FinishSettingsRequest(
 
 PLUGIN_CODE(coin) bool PLUGIN_coin_CopyHomeAccounting(u32 out[5], u32 *generation)
 {
-    if (!g_coinHandoffControl || g_coinHandoffControl[7] > 1u)
+    if (!PLUGIN_coin_HomeAccountingPrepared())
         return false;
     out[0] = 1u;
     for (u32 i = 1u; i < 5u; i++)

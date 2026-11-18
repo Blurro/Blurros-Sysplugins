@@ -246,11 +246,19 @@ PLUGIN_coin_accountingLoadHook:
     ldr     r6, [r4]
     mov     r7, #0x4f00
     cmp     r6, r7
-    bne     accountingLoadDone
+    bne     accountingLoadUnverified
     adrl     r6, PLUGIN_coin_handoffControl
     ldr     r7, [r6, #28]
+    cmp     r7, #2
+    beq     accountingLoadOverlay @ prepared private fields, no native observation yet
     cmp     r7, #1
-    bne     accountingLoadDone
+    beq     accountingLoadTrusted
+accountingLoadUnverified:
+    @ no verified private state, so no native Today can become an award baseline
+    mov     r7, #0
+    strh    r7, [r4, #6]
+    b       accountingLoadDone
+accountingLoadTrusted:
     cmp     r8, #0
     bne     accountingLoadOverlay
     ldrh    r7, [r4, #6]
@@ -327,8 +335,8 @@ PLUGIN_coin_accountingSaveHook:
     mcr     p15, 0, r6, c7, c10, 5
     ldrh    r6, [r4, #6]        @ keep HOME's real counter
     ldr     r8, [r5, #28]
-    cmp     r8, #1
-    bne     accountingSaveNativeReady
+    cmp     r8, #0
+    beq     accountingSaveNativeReady @ only a prepared/committed state writes the lock
     ldr     r8, [r4]
     mov     r5, #0x4f00
     cmp     r8, r5
@@ -363,6 +371,11 @@ accountingSaveNativeReady:
     cmp     r5, #3
     bne     accountingSaveDone
 accountingSaveCheckRecord:
+    @ never publish native counters when the private setup was not verified
+    adrl    r5, PLUGIN_coin_handoffControl
+    ldr     r6, [r5, #28]
+    cmp     r6, #0
+    beq     accountingSaveDone
     @ only trust a valid gamecoin record as the next snapshot
     ldr     r5, [r4]
     mov     r6, #0x4f00

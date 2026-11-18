@@ -312,7 +312,8 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_ImportAccounting(
             PLUGIN_coin_AccountingDate(record[4]))
         {
             accounting[0] = 1;
-            accounting[1] = (record[1] >> 16) > 10u ? 10u : (record[1] >> 16);
+            // 11 is our native lock, not ten earned coins
+            accounting[1] = (record[1] >> 16) <= 10u ? (record[1] >> 16) : 0u;
             accounting[2] = record[2];
             accounting[3] = record[3];
             accounting[4] = record[4];
@@ -559,7 +560,8 @@ PLUGIN_CODE(coin) static Result PLUGIN_coin_GetPlayCoins(
         if (*out > 300u)
             *out = 300u;
         u32 today = nativeWalletToday >> 16;
-        *outToday = (u16)(today > 10u ? 10u : today);
+        // native values over ten aren't real Today earnings
+        *outToday = (u16)(today <= 10u ? today : 0u);
     }
     else
     {
@@ -794,6 +796,17 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
                     return false;
                 }
             }
+            else if (!extensionValid && accounting[1] == 11u)
+            {
+                // no verified private Today: don't recover the native sentinel
+                accounting[1] = 0u;
+                if (!PLUGIN_coin_WriteAccountingBlock(file, base[4], accounting))
+                {
+                    COIN_HOST__FSFILE_Close(file);
+                    COIN_HOST__FSUSER_CloseArchive(sd);
+                    return false;
+                }
+            }
         }
         else if (accountingSize == COIN_FILE_BASE_SIZE ||
             accountingSize == COIN_FILE_OLD_NO_ACHIEVEMENT_SIZE ||
@@ -867,6 +880,17 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
                 return false;
             }
             privateValid = PLUGIN_coin_DecodeAccounting(stored, base[4], accounting);
+            if (privateValid && !extensionValid && accounting[1] == 11u)
+            {
+                // the verified extension is gone, so eleven has no trusted origin
+                accounting[1] = 0u;
+                if (!PLUGIN_coin_WriteAccountingBlock(file, base[4], accounting))
+                {
+                    COIN_HOST__FSFILE_Close(file);
+                    COIN_HOST__FSUSER_CloseArchive(sd);
+                    return false;
+                }
+            }
         }
         if (!privateValid && !PLUGIN_coin_ResetAccounting(accounting,
                 extensionValid ? todayBucket : nativeToday))
@@ -889,9 +913,10 @@ PLUGIN_CODE(coin) bool PLUGIN_coin_InitializeHomeMenuState(
     accounting[12] = flatCheckpoint |
         (flatWallet ? COIN_EXT_FLAT_WALLET : 0u);
     accounting[16] = dayState;
-    // fresh and legacy files wait for the first full save and native lock
+    // prepared from private state, but the first full save is still pending
+    // 0 = no verified setup, 2 = prepared, 1 = saved and native-locked
     if (originalSize < COIN_FILE_NO_ACHIEVEMENT_SIZE)
-        accounting[0] = 0;
+        accounting[0] = 2u;
 
     COIN_HOST__FSFILE_Close(file);
     COIN_HOST__FSUSER_CloseArchive(sd);

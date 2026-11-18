@@ -628,6 +628,7 @@ extern bool PLUGIN_coin_CopySettingsRequest(u32 out[4]);
 extern void PLUGIN_coin_FinishSettingsRequest(const u32 accounting[5], bool saved, u32 *generation);
 extern void PLUGIN_coin_PublishAccountingReady(void);
 extern bool PLUGIN_coin_HomeAccountingReady(void);
+extern bool PLUGIN_coin_HomeAccountingPrepared(void);
 extern u32 PLUGIN_coin_RtcDayDecision(void);
 extern bool PLUGIN_coin_RtcDayDecisionPending(void);
 extern bool PLUGIN_coin_RtcExactNextDayPending(void);
@@ -738,8 +739,9 @@ PLUGIN_CODE(coin) static bool PLUGIN_coin_HomeCounterExceedsToday(u32 currentDay
     u32 dayState = g_coinExtendedData[COIN_EXT_LAST_DAY_WORD];
     u32 trackedDay = dayState & COIN_EXT_DAY_VALUE_MASK;
 
-    // keep preserved Today isolated from a rebased HOME day
-    if (dayState & COIN_EXT_DAY_REBASE_PRESERVE)
+    // only a prepared private baseline can justify raising today's counter
+    if (!PLUGIN_coin_HomeAccountingPrepared() ||
+        (dayState & COIN_EXT_DAY_REBASE_PRESERVE))
         return false;
 
     return currentDay && currentStamp && (!trackedDay || currentDay >= trackedDay) &&
